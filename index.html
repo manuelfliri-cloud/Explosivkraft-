@@ -1,0 +1,1376 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b6ec2">
+<title>Explosivkraft</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--fg:#1d2733;--mut:#5d6b7a;--line:#d5dbe1;--pri:#1b6ec2;--priT:#fff;--bad:#c62828;--ok:#2e7d32;
+--plot-bg:#fff;--plot-fg:#1d2733;--plot-grid:#e3e7eb;--plot-line:#1f77b4;--plot-acc:#d62728;--plot-span:rgba(255,127,14,.16);--plot-good:#2ca02c}
+@media (prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--fg:#e6ebf0;--mut:#9aa7b4;--line:#323b45;--pri:#4a9be8;--priT:#07121e;--bad:#ef6c6c;--ok:#6fcf74;
+--plot-bg:#1b2128;--plot-fg:#e6ebf0;--plot-grid:#2c353f;--plot-line:#5aa9f0;--plot-acc:#ff6b6b;--plot-span:rgba(255,167,38,.18);--plot-good:#6fcf74}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding:8px 12px calc(12px + env(safe-area-inset-bottom));max-width:1100px;margin:0 auto}
+h1{font-size:18px;margin:4px 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:2px}
+input,select,button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:42px}
+input{width:84px}
+button{cursor:pointer;touch-action:manipulation}
+button.pri{background:var(--pri);color:var(--priT);border-color:var(--pri);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+.mini{min-height:34px;padding:4px 10px;font-size:13px}
+#status{font-weight:600;min-height:20px}
+#warn{color:var(--bad);margin-top:4px;font-size:13px}
+#engine{font-size:12px;color:var(--mut)} #engine.ok{color:var(--ok)} #engine.bad{color:var(--bad)}
+.tabs{display:flex;gap:6px;margin-bottom:6px}
+.tabs button{flex:1} .tabs button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
+#plot{width:100%;height:calc(100vh - 170px);min-height:420px;display:block;border:1px solid var(--line);border-radius:8px;background:var(--plot-bg)}
+#cursor{font-size:13px;min-height:20px;margin-top:6px;color:var(--mut);font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;font-size:13px;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap} th{font-size:11px;color:var(--mut)}
+.bars canvas{width:100%;height:170px;display:block;margin-top:8px;border:1px solid var(--line);border-radius:8px}
+.chk{flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--fg)}
+.chk input{width:auto;min-height:0}
+body.busy #status::after{content:" ⏳"}
+details summary{cursor:pointer;color:var(--mut);font-size:13px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>Explosivkraft-Messung <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+
+<div class="card">
+  <div class="row">
+    <button id="btnConnect" class="pri">Verbinden</button>
+    <button id="btnStart" class="pri">Messung starten</button>
+    <button id="btnStop">Stopp</button>
+    <button id="btnLive">Live-Daten</button>
+  </div>
+  <details id="sets" open style="margin-top:8px">
+    <summary>Einstellungen</summary>
+    <div class="row" style="margin-top:8px">
+      <label>Masse (kg) <span id="masseHelp" style="text-decoration:underline;cursor:pointer">?</span><input id="masse" inputmode="decimal" value="100"></label>
+      <label>Dauer (s)<input id="dauer" inputmode="decimal" value="20"></label>
+      <label>Korrektur<select id="korr"><option>Aus (nur Z-Achse)</option><option selected>Sensorwinkel</option><option>Gyro-Filter (Drehungen)</option></select></label>
+      <label>Tiefpass (Hz)<select id="filter"><option>Aus</option><option>10</option><option selected>20</option><option>30</option><option>50</option></select></label>
+      <label>Abtastrate (Hz)<select id="rate" disabled><option>10</option><option>20</option><option>50</option><option selected>100</option><option>200</option></select></label>
+      <button id="btnCal">Kalibrieren</button>
+      <label class="chk" title="Falls der Sensor in der Liste nicht erscheint"><input type="checkbox" id="alle"> alle Geräte zeigen</label>
+    </div>
+  </details>
+</div>
+
+<div class="card"><div id="status">Nicht verbunden.</div><div id="warn" hidden></div></div>
+
+<div class="tabs"><button id="tbCurves" class="on">Kurven</button><button id="tbReps">Wiederholungen</button></div>
+
+<div id="tab-curves" class="card">
+  <canvas id="plot"></canvas>
+  <div id="cursor"></div>
+  <div class="row" style="margin-top:6px">
+    <button id="btnZoom" class="mini">Ganze Messung</button>
+    <label class="chk"><input type="checkbox" id="zahlen"> Zahlen ausblenden</label>
+  </div>
+</div>
+
+<div id="tab-reps" class="card" hidden>
+  <div id="summary" style="margin-bottom:8px">Noch keine Messung.</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v −%</th><th>F −%</th><th>P −%</th></tr></thead>
+    <tbody id="repBody"></tbody></table></div>
+  <div class="bars"><canvas id="bar1"></canvas><canvas id="bar2"></canvas><canvas id="bar3"></canvas></div>
+</div>
+
+<div class="card row">
+  <button id="btnSave">Messung speichern</button>
+  <button id="btnLoad">Messung laden</button>
+  <button id="btnExport">Tabelle exportieren</button>
+  <button id="btnReeval">Neu auswerten</button>
+  <button id="btnReset">Zurücksetzen</button>
+  <input type="file" id="file" accept=".csv,text/csv,text/plain" hidden>
+</div>
+
+<script type="text/plain" id="analyse-py">"""
+Auswertung der Beschleunigungsdaten (ohne GUI- oder Bluetooth-Abhängigkeiten).
+
+Eingabe: Liste von Samples (t, ax, ay, az, az_welt, gx, gy, gz) mit Beschleunigung in g
+und Drehrate in °/s. Ausgabe: ein Ergebnis-Objekt mit Kurven und Kennwerten je Wiederholung.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+import numpy as np
+
+try:
+    from scipy.signal import butter, filtfilt
+    HAS_SCIPY = True
+except ImportError:  # Fallback: Gleitmittelwert
+    HAS_SCIPY = False
+
+log = logging.getLogger(__name__)
+
+G = 9.81
+
+# Wiederholungserkennung
+V_MIN_REP = 0.15          # m/s, Mindest-Aufwärtsgeschwindigkeit
+V_RAND = 0.01             # m/s, Rand der Wiederholung (Geschwindigkeit ~ 0)
+MIN_HUB_ANTEIL = 0.5      # Wdh. mit weniger als 50 % des größten Hubs werden verworfen
+MAX_START_ABW = 0.7       # max. Abweichung der Starthöhe (Anteil des größten Hubs)
+MIN_REP_DAUER = 0.2       # s
+MERGE_LUECKE = 0.1        # s, Wdh. mit kleinerer Lücke werden verschmolzen
+BASIS_FENSTER_S = 4.0  # s: Fenster für den langsamen Geschwindigkeits-Versatz bei der Erkennung
+BASIS_TOTZONE = 0.10   # m/s: kleinere Versätze werden nicht herausgerechnet
+ANKER_SCHWELLEN = (V_MIN_REP, 0.10, 0.10)  # Kandidaten fürs Verankern: zweite Stufe empfindlicher
+VOLLER_HUB_ANTEIL = 0.8  # Kandidaten mit mindestens diesem Hub-Anteil entfallen von der Starthöhen-Prüfung
+MAX_ZYKLUS_S = 6.0     # s: Zyklen (Start bis nächster Start) bis zu dieser Länge werden geschlossen
+VORLAUF_MAX_S = 1.0     # s: längerer Vorlauf vor der Spitze gilt nicht mehr als Teil des Stoßes
+VORLAUF_ANTEIL = 0.05   # Anteil der Spitzengeschwindigkeit, ab dem der Stoß beginnt
+STEIGUNG_MIN = 0.05     # 1/s: Mindeststeigung von v am Stoßanfang, Anteil der Spitzengeschwindigkeit pro Sekunde
+LETZTE_MIN_ZYKLEN = 2  # so viele frühere Zyklen braucht die Schätzung für die letzte Wiederholung
+SENK_V = 0.3           # m/s: Geschwindigkeit, ab der ein Stoß bzw. Senken gezählt wird
+LETZTE_TOL = 0.5       # Anteil des Hubs: so weit darf die Nettoverschiebung des letzten Zyklus von den früheren abweichen
+RAND_TOL = 0.003      # m/s: Toleranz beim Verlängern der Fensterränder (Rauschen)
+MIN_FENSTER_SAMPLES = 5   # kleinste erlaubte Fensterbreite
+START_NACHBARN = 3        # Starthöhe wird mit so vielen Wdh. links/rechts verglichen (nicht mit der besten)
+V_MIN_BEREICH = (V_MIN_REP, 0.08, 0.04)   # immer empfindlichere Schwellen für den markierten Bereich
+
+# Gyro-Filter
+GATE = 0.15
+KP_GYRO = 1.0
+
+# Qualitätsprüfungen
+SAT_G = 15.8              # Sensorbereich ±16 g
+RATE_TOL = 0.05           # 5 % Abweichung der Abtastrate
+RUHE_STD_MAX = 0.5        # m/s², max. Rauschen in den ersten 0,5 s
+RATE_STUFEN = (10, 20, 50, 100, 200)
+
+# Spalten im Sample-Array
+COL_T = 0
+ACC = slice(1, 4)
+COL_AZ = 3
+COL_AZ_WELT = 4
+GYR = slice(5, 8)
+
+
+@dataclass
+class Rep:
+    nr: int
+    s: int                      # Startindex
+    e: int                      # Endindex (exklusiv)
+    t_start: float = 0.0
+    dauer: float = 0.0
+    hub: float = 0.0
+    a_max: float = 0.0
+    v_max: float = 0.0
+    v_mean: float = 0.0
+    F_max: float = 0.0
+    F_mean: float = 0.0
+    P_max: float = 0.0
+    P_mean: float = 0.0
+    dv: float = 0.0             # Abfall ggü. bester Wdh. in %
+    dF: float = 0.0
+    dP: float = 0.0
+
+
+@dataclass
+class Ergebnis:
+    t: np.ndarray
+    weg: np.ndarray
+    v: np.ndarray
+    a: np.ndarray
+    F: np.ndarray
+    P: np.ndarray
+    dt: float
+    hz: int
+    drift: float
+    hub: np.ndarray = None
+    reps: list = field(default_factory=list)
+    warnungen: list = field(default_factory=list)
+
+    def setze_reps(self, grenzen):
+        """Setzt die Wiederholungsfenster (Sample-Indizes) und berechnet alle Kennwerte neu."""
+        n = len(self.t)
+        gr = sorted((max(0, int(s)), min(n, int(e))) for s, e in grenzen)
+        bereinigt, letztes_ende = [], 0
+        for s, e in gr:
+            s = max(s, letztes_ende)           # keine Überlappung
+            if e - s >= 2:
+                bereinigt.append((s, e))
+                letztes_ende = e
+        reps = []
+        for k, (s, e) in enumerate(bereinigt, 1):
+            sl = slice(s, e)
+            reps.append(Rep(
+                nr=k, s=s, e=e, t_start=float(self.t[s]), dauer=(e - s) * self.dt,
+                hub=float(self.weg[sl].max() - self.weg[s]),
+                a_max=float(self.a[sl].max()), v_max=float(self.v[sl].max()),
+                v_mean=float(self.v[sl].mean()),
+                F_max=float(self.F[sl].max()), F_mean=float(self.F[sl].mean()),
+                P_max=float(self.P[sl].max()), P_mean=float(self.P[sl].mean())))
+        if reps:
+            beste = {k: max(getattr(r, k) for r in reps) for k in ("P_max", "F_max", "v_max")}
+            for r in reps:
+                r.dP = (1 - r.P_max / beste["P_max"]) * 100 if beste["P_max"] > 0 else 0.0
+                r.dF = (1 - r.F_max / beste["F_max"]) * 100 if beste["F_max"] > 0 else 0.0
+                r.dv = (1 - r.v_max / beste["v_max"]) * 100 if beste["v_max"] > 0 else 0.0
+        self.reps = reps
+        self.hub = hub_kurve(self.weg, reps)
+
+    def erkenne_im_bereich(self, t0, t1):
+        """
+        Wiederholungen, deren Geschwindigkeitsspitze im Bereich [t0, t1] (Sekunden) liegt, als Liste (s, e).
+        Der Nutzer sagt hier, dass dort Wiederholungen sind. Deshalb wird die Schwelle schrittweise
+        empfindlicher, bis etwas gefunden wird.
+        """
+        n = len(self.t)
+        i0, i1 = max(0, int(round(t0 / self.dt))), min(n, int(round(t1 / self.dt)))
+        for v_min in V_MIN_BEREICH:
+            segs = [(s, e) for s, e in finde_wiederholungen(self.v, self.dt, v_min)
+                    if i0 <= s + int(np.argmax(self.v[s:e])) < i1]
+            if segs:
+                hubs = [float(self.weg[s:e].max() - self.weg[s]) for s, e in segs]
+                grenze = MIN_HUB_ANTEIL * max(hubs)
+                return [sg for sg, h in zip(segs, hubs) if h >= grenze]
+        return []
+
+    def fenster_sekunden(self):
+        return [(r.s * self.dt, r.e * self.dt) for r in self.reps]
+
+
+def integrieren(a, dt):
+    return np.concatenate(([0.0], np.cumsum((a[1:] + a[:-1]) / 2 * dt)))
+
+
+def rekonstruiere_zeit(t_ankunft):
+    """Gleichmäßige Zeitachse per linearem Fit (BLE-Pakete kommen gebündelt an)."""
+    t = np.asarray(t_ankunft, dtype=float)
+    n = len(t)
+    if n < 10:
+        return t - t[0]
+    k = np.arange(n)
+    steigung, achsenabschnitt = np.polyfit(k, t - t[0], 1)
+    t_neu = steigung * k + achsenabschnitt
+    return t_neu - t_neu[0]
+
+
+def tiefpass(daten, fs, grenzfreq):
+    """Nullphasiger Tiefpass. Butterworth (scipy) oder Gleitmittelwert als Fallback."""
+    daten = np.asarray(daten, dtype=float)
+    if not grenzfreq or grenzfreq <= 0 or len(daten) < 15 or grenzfreq >= 0.45 * fs:
+        return daten
+    if HAS_SCIPY:
+        b, a = butter(2, grenzfreq / (fs / 2))   # filtfilt verdoppelt die Ordnung
+        return filtfilt(b, a, daten)
+    k = int(round(0.443 * fs / grenzfreq))        # -3-dB-Frequenz des Gleitmittels
+    if k % 2 == 0:
+        k += 1
+    if k <= 1 or len(daten) < k:
+        return daten
+    pad = k // 2
+    return np.convolve(np.pad(daten, (pad, pad), mode="edge"), np.ones(k) / k, mode="valid")
+
+
+def finde_wiederholungen(v, dt, v_min=V_MIN_REP):
+    n = len(v)
+    aktiv = v > v_min
+    segs, start = [], None
+    for i in range(n):
+        if aktiv[i] and start is None:
+            start = i
+        elif not aktiv[i] and start is not None:
+            segs.append([start, i])
+            start = None
+    if start is not None:
+        segs.append([start, n])
+
+    merged = []
+    for s in segs:
+        if merged and (s[0] - merged[-1][1]) * dt < MERGE_LUECKE:
+            merged[-1][1] = s[1]
+        else:
+            merged.append(s)
+
+    out = []
+    for s, e in merged:
+        if (e - s) * dt < MIN_REP_DAUER:
+            continue
+        # Langer, schwacher Vorlauf (Rest-Drift nach einem kleinen Stoß, Gehen, Hängen): die Wiederholung beginnt
+        # erst dort, wo der eigentliche Stoß anfängt. Dort ist v wirklich ~0 und der richtige Ankerpunkt.
+        pk = s + int(np.argmax(v[s:e]))
+        if (pk - s) * dt > VORLAUF_MAX_S:
+            tief = np.nonzero(v[s:pk] < max(V_RAND, VORLAUF_ANTEIL * v[pk]))[0]
+            s = s + int(tief[-1]) if len(tief) else pk - int(0.3 / dt)
+        # Rand nur so weit verlängern, wie v noch fällt. Bleibt nach dem Stoß eine Rest-Geschwindigkeit
+        # (Drift) stehen, endet die Wiederholung am Ende des Abfalls und nicht erst bei v = 0.
+        # Am Anfang nur dort, wo v wirklich ansteigt: eine flache Stelle (konstanter Versatz) gehört nicht dazu.
+        vp = float(np.max(v[s:e]))
+        steigung_min = STEIGUNG_MIN * vp * dt
+        while s > 0 and V_RAND < v[s - 1] <= v[s] + RAND_TOL and v[s] - v[s - 1] > steigung_min:
+            s -= 1
+        while e < n and V_RAND < v[e] <= v[e - 1] + RAND_TOL:
+            e += 1
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(e, out[-1][1]))
+        else:
+            out.append((s, e))
+    return out
+
+
+def langsamer_versatz(v, dt):
+    """Langsam veränderlicher Geschwindigkeits-Versatz (Drift bei gekipptem Sensor). Gleitender Median über
+    mehrere Sekunden, kleine Werte (Totzone) werden ignoriert, damit normale Messungen unverändert bleiben.
+    Reines numpy (ohne scipy): der Median wird auf einem groben Raster berechnet, der Versatz ist ja langsam."""
+    n = len(v)
+    schritt = max(1, int(0.1 / dt))
+    k = max(3, int(BASIS_FENSTER_S / dt / schritt) | 1)
+    vg = v[::schritt]
+    if len(vg) < k:
+        return np.zeros_like(v)
+    pad = k // 2
+    vp = np.concatenate((np.full(pad, vg[0]), vg, np.full(pad, vg[-1])))
+    fenster = np.lib.stride_tricks.sliding_window_view(vp, k)
+    b = np.empty(len(vg))
+    for i in range(0, len(vg), 2000):                 # in Stücken, spart Speicher bei langen Messungen
+        b[i:i + 2000] = np.median(fenster[i:i + 2000], axis=1)
+    b = np.interp(np.arange(n), np.arange(len(vg)) * schritt, b)
+    return np.sign(b) * np.maximum(np.abs(b) - BASIS_TOTZONE, 0.0)
+
+
+def erkenne(v, dt, v_min=V_MIN_REP):
+    """Wiederholungen suchen, nachdem ein großer langsamer Versatz von v abgezogen wurde."""
+    return finde_wiederholungen(v - langsamer_versatz(v, dt), dt, v_min)
+
+
+def verwerfe_stoerungen(v, segs, dt):
+    if len(segs) < 2:
+        return segs
+    weg = integrieren(v, dt)
+    hubs = np.array([weg[s:e].max() - weg[s] for s, e in segs])
+    starts = np.array([weg[s] for s, _ in segs])
+    # Zweites Maß: Hübe nach Zyklus-Schließung. Bei starker Drift sind die rohen Hübe um Dezimeter verfälscht und
+    # normale Wiederholungen wirken "zu klein". Eine Wiederholung bleibt, wenn sie nach einem der beiden Maße groß
+    # genug ist (roh: Doppelstöße; korrigiert: Drift).
+    weg_k = integrieren(zyklen_schliessen(v, [s for s, _ in segs], dt), dt)
+    hubs_k = np.array([weg_k[s:e].max() - weg_k[s] for s, e in segs])
+    # Referenz = Median der oberen Hälfte: ein einzelner durch Drift riesiger Hub (Meter) darf nicht
+    # alle normalen Wiederholungen als "zu klein" aussortieren.
+    h_ref = float(np.median(np.sort(hubs)[len(hubs) // 2:]))
+    h_ref_k = float(np.median(np.sort(hubs_k)[len(hubs_k) // 2:]))
+    ref = int(np.argmin(np.abs(hubs - h_ref)))
+    grenze = MAX_START_ABW * h_ref
+    hub_ok = (hubs >= MIN_HUB_ANTEIL * h_ref) | (hubs_k >= MIN_HUB_ANTEIL * h_ref_k)
+    # Die integrierte Position driftet bei langen Sätzen um Meter weg. Deshalb wird die Starthöhe nur
+    # mit den Nachbar-Wiederholungen verglichen, nicht mit der besten des ganzen Satzes.
+    n = len(segs)
+    start_ok = np.ones(n, dtype=bool)
+    for k in range(n):
+        nachbarn = [j for j in range(max(0, k - START_NACHBARN), min(n, k + START_NACHBARN + 1))
+                    if j != k and hub_ok[j]]
+        if nachbarn:
+            start_ok[k] = abs(starts[k] - np.median(starts[nachbarn])) <= grenze
+    # Bei gekipptem Sensor driftet die Starthöhe um Meter. Kandidaten mit vollem Hub sind trotzdem echte
+    # Wiederholungen; die Starthöhe prüft nur kleinere Kandidaten (typische Störungen).
+    start_ok |= hubs >= VOLLER_HUB_ANTEIL * h_ref
+    start_ok[ref] = True
+    keep = hub_ok & start_ok
+    return [sg for sg, k in zip(segs, keep) if k]
+
+
+def _trapez(y, dx):
+    return float(np.sum((y[1:] + y[:-1]) / 2) * dx)
+
+
+def _ende_der_senkphase(v, s, dt):
+    """Index (relativ zu s), an dem nach Stoß und Senken die Hantel wieder zur Ruhe kommt, oder None, wenn
+    nach dem Stoß nicht gesenkt wurde (Stange bleibt oben) oder der Zyklus zu lang ist."""
+    n = min(len(v) - s, int(MAX_ZYKLUS_S / dt))
+    seg = v[s:s + n]
+    hoch = np.nonzero(seg > SENK_V)[0]
+    if len(hoch) == 0:
+        return None
+    runter = np.nonzero(seg[hoch[0]:] < -SENK_V)[0]
+    if len(runter) == 0:
+        return None
+    i = hoch[0] + runter[0]
+    ruhe = np.nonzero(seg[i:] > -0.05)[0]
+    if len(ruhe) == 0:
+        return None
+    j = int(i + ruhe[0])
+    return j if j > 10 else None
+
+
+def zyklen_schliessen(v, starts, dt, ende=None):
+    """
+    Zwischen zwei aufeinanderfolgenden Wiederholungen kommt die Stange wieder auf die Startposition zurück
+    (Brust, Boden). Die Nettoverschiebung eines Zyklus ist also null. Bleibt in v ein Rest (Drift, Sensorkippen),
+    wird er als Parabel mit Nullstellen an beiden Zyklusenden abgezogen. Das hält den Hub bei langen Sätzen
+    ohne Pause stabil. Nur für kurze Zyklen, die Starts selbst bleiben unverändert.
+
+    Die letzte Wiederholung hat keinen Folge-Start. Ist `ende` (Index des Satzendes) gegeben und kam die Stange
+    danach so zurück wie nach den vorherigen (Nettoverschiebung bis zum Satzende passt zu den früheren Zyklen),
+    bekommt sie dieselbe Korrektur wie diese. Bleibt die Stange oben (z. B. Ende einer Bankdrück-Serie),
+    bleibt sie unverändert.
+    """
+    v = v.copy()
+    w = integrieren(v, dt)
+    st = sorted(starts)
+    laengen, netto = [], []
+    for s, e in zip(st[:-1], st[1:]):
+        T = (e - s) * dt
+        if T > MAX_ZYKLUS_S or e - s < 10:
+            continue
+        laengen.append(T)
+        netto.append(float(w[e] - w[s]))
+        tau = np.arange(e - s + 1) * dt
+        p = tau * (T - tau)
+        k = _trapez(v[s:e + 1], dt) / _trapez(p, dt)
+        v[s:e + 1] -= k * p
+    if ende is not None and len(laengen) >= LETZTE_MIN_ZYKLEN:
+        s = st[-1]
+        j = _ende_der_senkphase(v, s, dt)          # None: nach dem Stoß wurde nicht gesenkt
+        T = float(np.median(laengen))
+        e = s + int(round(T / dt))
+        i_vor = float(np.median(netto))
+        if j is not None and e < len(v) and e > s + 10:
+            hub = float(w[s:s + j + 1].max() - w[s])
+            if hub > 0 and abs(float(w[s + j] - w[s]) - i_vor) < LETZTE_TOL * hub:
+                tau = np.arange(e - s + 1) * dt
+                v[s:e + 1] -= (i_vor * 6 / T ** 3) * tau * (T - tau)
+    return v
+
+
+def hub_kurve(weg, reps):
+    """Hub relativ zum Start der jeweils letzten Wiederholung."""
+    if reps:
+        starts = [r.s for r in reps]
+        return weg - np.interp(np.arange(len(weg)), starts, weg[starts])
+    return weg - weg[0]
+
+
+def vertikal_mit_gyro(arr):
+    """Vertikale Beschleunigung (g) mit Mahony-Filter inkl. Gate gegen Fremdbeschleunigung."""
+    t = arr[:, COL_T]
+    acc = arr[:, ACC]
+    n0 = max(3, int(np.searchsorted(t, t[0] + 0.5)))
+    gyr = np.radians(arr[:, GYR]) - np.radians(arr[:n0, GYR]).mean(axis=0)
+
+    u = acc[:n0].mean(axis=0)
+    u = u / np.linalg.norm(u)
+    if u[2] < -0.999:
+        w, x, y, z = 0.0, 1.0, 0.0, 0.0
+    else:
+        w, x, y, z = 1.0 + u[2], u[1], -u[0], 0.0
+    nq = np.sqrt(w * w + x * x + y * y + z * z)
+    w, x, y, z = w / nq, x / nq, y / nq, z / nq
+
+    out = np.empty(len(t))
+    for i in range(len(t)):
+        ax, ay, az = acc[i]
+        if i > 0:
+            dt = min(max(t[i] - t[i - 1], 0.0), 0.05)
+            wx, wy, wz = gyr[i]
+            an = np.sqrt(ax * ax + ay * ay + az * az)
+            if an > 1e-6 and abs(an - 1.0) < GATE:
+                kp = KP_GYRO * (1.0 - abs(an - 1.0) / GATE)
+                vx = 2 * (x * z - w * y)
+                vy = 2 * (y * z + w * x)
+                vz = w * w - x * x - y * y + z * z
+                nax, nay, naz = ax / an, ay / an, az / an
+                wx += kp * (nay * vz - naz * vy)
+                wy += kp * (naz * vx - nax * vz)
+                wz += kp * (nax * vy - nay * vx)
+            h = 0.5 * dt
+            dw = -x * wx - y * wy - z * wz
+            dx = w * wx + y * wz - z * wy
+            dy = w * wy - x * wz + z * wx
+            dz = w * wz + x * wy - y * wx
+            w, x, y, z = w + dw * h, x + dx * h, y + dy * h, z + dz * h
+            nq = np.sqrt(w * w + x * x + y * y + z * z)
+            w, x, y, z = w / nq, x / nq, y / nq, z / nq
+        out[i] = (2 * (x * z - w * y) * ax + 2 * (y * z + w * x) * ay
+                  + (w * w - x * x - y * y + z * z) * az)
+    return out
+
+
+def auswerten(samples, masse, modus, grenzfreq=20.0, hz=None, fenster=None):
+    """
+    samples   : Liste/Array (t, ax, ay, az, az_welt[, gx, gy, gz])
+    masse     : bewegte Gesamtmasse in kg
+    modus     : 0 = nur Z-Achse, 1 = Sensorwinkel, 2 = Gyro-Filter
+    grenzfreq : Tiefpass-Grenzfrequenz in Hz (None = aus)
+    hz        : eingestellte Abtastrate (None = aus den Daten schätzen)
+    fenster   : optionale feste Wiederholungsfenster [(t0, t1), ...] in Sekunden
+    """
+    arr = np.array(samples, dtype=float)
+    if arr.ndim != 2 or len(arr) < 50 or arr.shape[1] < 4:
+        raise ValueError("Zu wenige oder ungültige Messdaten.")
+    warn = []
+
+    if not HAS_SCIPY:
+        warn.append("scipy ist nicht installiert - einfacherer Tiefpass, Ergebnisse weichen leicht ab. "
+                    "Empfohlen: pip install scipy")
+
+    n_sat = int(np.sum(np.any(np.abs(arr[:, ACC]) >= SAT_G, axis=1)))
+    if n_sat:
+        warn.append(f"Sensor übersteuert ({n_sat} Samples ≥ {SAT_G} g) - Spitzenwerte unzuverlässig!")
+
+    arr[:, COL_T] = rekonstruiere_zeit(arr[:, COL_T])
+    t = arr[:, COL_T]
+    if t[-1] <= 0:
+        raise ValueError("Ungültige Zeitachse.")
+
+    hz_mess = (len(t) - 1) / t[-1]
+    if hz is None:
+        hz = min(RATE_STUFEN, key=lambda r: abs(r - hz_mess))
+    if abs(hz_mess / hz - 1) > RATE_TOL:
+        nah = min(RATE_STUFEN, key=lambda r: abs(r - hz_mess))
+        if abs(hz_mess / nah - 1) <= RATE_TOL:
+            # Der Sensor sendet gleichmäßig eine andere Stufe als eingestellt (z. B. nur 100 statt 200 Hz über
+            # Bluetooth). Das ist kein Paketverlust, die Auswertung rechnet mit der tatsächlichen Rate.
+            warn.append(f"Gemessene Rate {nah} Hz statt der eingestellten {hz} Hz: es kommen nicht mehr an (Sensor oder Bluetooth). "
+                        f"Ausgewertet wird mit {nah} Hz.")
+            hz = nah
+        else:
+            warn.append(f"Gemessene Rate {hz_mess:.0f} Hz weicht von {hz} Hz ab - Paketverlust? "
+                        "Zeitachse evtl. verzerrt.")
+    dt = 1.0 / hz
+
+    if modus == 0:
+        acc_g = arr[:, COL_AZ]
+    elif modus == 2 and arr.shape[1] >= 8:
+        acc_g = vertikal_mit_gyro(arr)
+    elif arr.shape[1] > COL_AZ_WELT:
+        acc_g = arr[:, COL_AZ_WELT]
+    else:
+        acc_g = arr[:, COL_AZ]
+
+    tu = np.arange(0, t[-1], dt)
+    n = len(tu)
+    a_g = np.interp(tu, t, acc_g)
+
+    n0 = max(5, int(0.5 / dt))
+    a_raw = (a_g - np.mean(a_g[:n0])) * G
+    if np.std(a_raw[:n0]) > RUHE_STD_MAX:
+        warn.append("Sensor war in den ersten 0,5 s nicht ruhig - Nullpunkt evtl. verfälscht.")
+    a = tiefpass(a_raw, hz, grenzfreq)
+
+    v_roh = integrieren(a, dt)
+
+    schwelle = max(0.4, 6 * np.std(a[:n0]))
+    aktiv = np.abs(a) > schwelle
+    if aktiv.sum() >= 3:
+        pad = int(0.15 / dt)
+        i0 = max(int(np.argmax(aktiv)) - pad, 0)
+        i1 = min(n - 1 - int(np.argmax(aktiv[::-1])) + pad, n - 1)
+    else:
+        i0, i1 = 0, n - 1
+    idx = np.arange(n)
+    im_fenster = (idx >= i0) & (idx <= i1)
+
+    def v_aus_ankern(anker):
+        v_ = v_roh - np.interp(idx, anker, v_roh[anker])
+        v_[~im_fenster] = 0.0
+        return v_
+
+    # Drift herausrechnen: Anker an den Starts aller Kandidaten (dort ist v ~ 0), mehrfach wiederholen,
+    # weil bessere Anker die Kandidaten wieder verbessern (wichtig bei langen Sätzen mit Sensorkippen).
+    v = v_aus_ankern([i0, i1])
+    for v_min in ANKER_SCHWELLEN:
+        kand = erkenne(v, dt, v_min)
+        anker = sorted(set([i0] + [min(max(s - 1, i0), i1) for s, _ in kand] + [i1]))
+        v = v_aus_ankern(anker)
+    segs = verwerfe_stoerungen(v, erkenne(v, dt), dt)
+
+    if fenster is not None:
+        grenzen = [(int(round(t0 / dt)), int(round(t1 / dt))) for t0, t1 in fenster]
+    else:
+        grenzen = list(segs)
+    v = zyklen_schliessen(v, [g[0] for g in grenzen], dt, ende=i1)
+
+    F = masse * (a + G)
+    P = F * v
+    weg = integrieren(v, dt)
+
+    res = Ergebnis(t=tu, weg=weg, v=v, a=a, F=F, P=P, dt=dt, hz=int(hz),
+                   drift=float(abs(v_roh[i1] - v_roh[i0])), warnungen=warn)
+    res.setze_reps(grenzen)
+    return res
+</script>
+<script type="text/plain" id="worker-src">/* Web Worker: Pyodide + unverändertes analyse.py */
+let py = null;
+const BOOT = `
+import json, numpy as np, analyse as A
+from dataclasses import asdict
+RES = None
+def _R(x): return np.round(np.asarray(x, float), 5).tolist()
+def pack(r):
+    return json.dumps(dict(t=_R(r.t), weg=_R(r.weg), hub=_R(r.hub), v=_R(r.v), a=_R(r.a), F=_R(r.F), P=_R(r.P),
+        dt=float(r.dt), hz=int(r.hz), drift=float(r.drift), warn=list(r.warnungen),
+        reps=[asdict(p) for p in r.reps], scipy=bool(A.HAS_SCIPY), vmin=A.V_MIN_REP))
+def run_eval(par, buf):
+    global RES
+    p = json.loads(par)
+    arr = np.array(buf.to_py(), dtype=float).reshape(-1, p["ncols"])
+    RES = A.auswerten(arr, p["masse"], p["modus"], p["grenz"], p["hz"], p["fenster"])
+    return pack(RES)
+def run_setze(par):
+    RES.setze_reps([tuple(x) for x in json.loads(par)])
+    return pack(RES)
+def run_bereich(par):
+    t0, t1 = json.loads(par)
+    return json.dumps([list(map(int, x)) for x in RES.erkenne_im_bereich(t0, t1)])
+`;
+self.onmessage = async (e) => {
+  const { id, cmd, args } = e.data;
+  try {
+    let out = null;
+    if (cmd === "init") {
+      importScripts(args.base + "pyodide.js");
+      py = await loadPyodide({ indexURL: args.base });
+      let scipyOk = true;
+      try { await py.loadPackage(["numpy", "scipy"]); }
+      catch (err) { scipyOk = false; await py.loadPackage(["numpy"]); }
+      py.FS.writeFile("analyse.py", args.src);
+      py.runPython(BOOT);
+      out = { scipyOk };
+    } else if (cmd === "eval") {
+      py.globals.set("PAR", JSON.stringify(args.par));
+      py.globals.set("BUF", args.buf);
+      out = py.runPython("run_eval(PAR, BUF)");
+    } else if (cmd === "setze") {
+      py.globals.set("PAR", JSON.stringify(args.grenzen));
+      out = py.runPython("run_setze(PAR)");
+    } else if (cmd === "bereich") {
+      py.globals.set("PAR", JSON.stringify(args.bereich));
+      out = py.runPython("run_bereich(PAR)");
+    }
+    self.postMessage({ id, ok: true, out });
+  } catch (err) {
+    self.postMessage({ id, ok: false, err: String(err && err.message || err) });
+  }
+};
+</script>
+<script>"use strict";
+/* Bluetooth-Anbindung (Web Bluetooth) und Live-Berechnung für den WitMotion WT9011DCL.
+   Entspricht der Klasse Sensor im PC-Programm (explosivkraft.py). */
+
+const G = 9.80665;
+const SERVICE_UUIDS = ["0000ffe5-0000-1000-8000-00805f9a34fb", "0000ffe0-0000-1000-8000-00805f9a34fb"];
+const NOTIFY_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb";
+const WRITE_UUID = "0000ffe9-0000-1000-8000-00805f9a34fb";
+// WT9011DCL laut Datenblatt: 0x0A ist nicht belegt, 200 Hz = 0x0B
+const RATE_CODES = { 10: 0x06, 20: 0x07, 50: 0x08, 100: 0x09, 200: 0x0B };
+
+const STILL_STD = 0.25, POS_RESET = 0.15, RUHE_STRENG = 0.06, RUHE_LOCKER_S = 1.0, V_RUHE = 0.08;
+const VERTRAUEN_MIN = 0.4, ABW_WEIT = 1.0, BIAS_RATE = 0.01, RUHE_MAX_S = 2.5;
+const LIVE_MAX = 3000;
+
+function mittel(a) { let s = 0; for (const x of a) s += x; return s / a.length; }
+function stdabw(a) { const m = mittel(a); let s = 0; for (const x of a) s += (x - m) * (x - m); return Math.sqrt(s / a.length); }
+function integrieren(a, dt) {           // Trapezregel wie analyse.integrieren
+  const out = new Array(a.length); out[0] = 0;
+  for (let i = 1; i < a.length; i++) out[i] = out[i - 1] + (a[i] + a[i - 1]) / 2 * dt;
+  return out;
+}
+
+class Sensor {
+  constructor(onEvent) {
+    this.onEvent = onEvent || (() => {});
+    this.device = null; this.server = null; this.notifyChar = null; this.writeChar = null;
+    this.buf = []; this.t0 = performance.now() / 1000;
+    this.mass = 100; this.scale = 1.0; this.calib = null; this.hz = 100;
+    this.recording = false; this.rec = [];
+    this.live = [];                 // Zeilen: [t, pos, v, a, F, P]
+    this.frames = 0;
+    this.resetLive();
+  }
+
+  resetLive() {
+    this.win = []; this.winMax = 25; this.bias = 0; this.vLive = 0; this.posLive = 0;
+    this.nSamples = 0; this.tFirst = null; this.tLive = 0; this.dtNom = 0.01; this.biasOk = false;
+    this.stillN = 0; this.quietN = 0; this.calmN = 0; this.pfad = 0;
+    this.segAktiv = false; this.segA = []; this.biasStart = 0; this.restPos = 0;
+    this.live = [];
+  }
+
+  get connected() { return !!(this.server && this.server.connected); }
+
+  // ---------- Verbindung ----------
+  async connect(alleGeraete = false) {
+    const opts = alleGeraete
+      ? { acceptAllDevices: true, optionalServices: SERVICE_UUIDS }
+      : { filters: [{ namePrefix: "WT" }], optionalServices: SERVICE_UUIDS };
+    this.onEvent("status", "Suche Sensor ...");
+    this.device = await navigator.bluetooth.requestDevice(opts);
+    this.device.addEventListener("gattserverdisconnected", () => this.onEvent("disconnected", "Verbindung zum Sensor verloren."));
+    this.onEvent("status", `Verbinde mit ${this.device.name || "Sensor"} ...`);
+    this.server = await this.device.gatt.connect();
+    this.notifyChar = null; this.writeChar = null;
+    for (const uuid of SERVICE_UUIDS) {
+      let svc;
+      try { svc = await this.server.getPrimaryService(uuid); } catch (e) { continue; }
+      for (const ch of await svc.getCharacteristics()) {
+        if (ch.uuid === NOTIFY_UUID) this.notifyChar = ch;
+        if (ch.uuid === WRITE_UUID) this.writeChar = ch;
+      }
+      if (this.notifyChar) break;
+    }
+    if (!this.notifyChar) throw new Error("Datenkanal des Sensors nicht gefunden (Service FFE5/FFE4).");
+    this.buf = [];
+    this.resetLive();
+    this.notifyChar.addEventListener("characteristicvaluechanged", (e) => this.onData(e.target.value));
+    await this.notifyChar.startNotifications();
+    try { await this.applyRate(100); } catch (e) { console.warn("Standard-Abtastrate konnte nicht gesetzt werden", e); }
+    this.onEvent("connected", this.device.name || "Sensor");
+  }
+
+  disconnect() {
+    try { if (this.server && this.server.connected) this.server.disconnect(); } catch (e) { /* ignorieren */ }
+  }
+
+  async write(bytes) {
+    if (!this.writeChar) throw new Error("Schreibkanal des Sensors nicht gefunden.");
+    const u8 = new Uint8Array(bytes);
+    if (this.writeChar.writeValueWithoutResponse) await this.writeChar.writeValueWithoutResponse(u8);
+    else await this.writeChar.writeValue(u8);
+  }
+
+  async applyRate(hz) {
+    await this.write([0xFF, 0xAA, 0x69, 0x88, 0xB5]);          // entsperren
+    await new Promise(r => setTimeout(r, 200));
+    await this.write([0xFF, 0xAA, 0x03, RATE_CODES[hz], 0x00]);
+    this.winMax = Math.max(5, Math.floor(hz * 0.25));
+    this.dtNom = 1.0 / hz; this.nSamples = 0; this.tFirst = null; this.win = [];
+    this.hz = hz;
+  }
+
+  // ---------- Datenempfang ----------
+  onData(dataView) {
+    for (let i = 0; i < dataView.byteLength; i++) this.buf.push(dataView.getUint8(i));
+    const tAnkunft = performance.now() / 1000 - this.t0;
+    while (this.buf.length >= 20) {
+      if (this.buf[0] !== 0x55 || this.buf[1] !== 0x61) { this.buf.shift(); continue; }
+      const f = this.buf.splice(0, 20);
+      const dv = new DataView(new Uint8Array(f).buffer);
+      const v = []; for (let k = 0; k < 9; k++) v.push(dv.getInt16(2 + 2 * k, true));
+      this.verarbeite(v, tAnkunft);
+    }
+  }
+
+  verarbeite(v, t) {
+    let ax = v[0] / 32768 * 16, ay = v[1] / 32768 * 16, az = v[2] / 32768 * 16;
+    if (this.calib) this.calib.push([ax, ay, az]);
+    ax *= this.scale; ay *= this.scale; az *= this.scale;
+    const gx = v[3] / 32768 * 2000, gy = v[4] / 32768 * 2000, gz = v[5] / 32768 * 2000;
+    const roll = v[6] / 32768 * Math.PI, pitch = v[7] / 32768 * Math.PI;
+    const azW = -Math.sin(pitch) * ax + Math.sin(roll) * Math.cos(pitch) * ay + Math.cos(roll) * Math.cos(pitch) * az;
+    this.frames++;
+    this.liveUpdate(t, (azW - 1.0) * G);
+    if (this.recording) this.rec.push([t, ax, ay, az, azW, gx, gy, gz]);
+  }
+
+  // ---------- Live-Berechnung (1:1 aus dem PC-Programm) ----------
+  liveUpdate(tAnkunft, aRaw) {
+    this.nSamples++;
+    if (this.tFirst === null) this.tFirst = tAnkunft;
+    else if (this.nSamples >= 300 && this.nSamples % 100 === 0) {
+      const dtMittel = (tAnkunft - this.tFirst) / (this.nSamples - 1);
+      if (Math.abs(dtMittel - this.dtNom) > 0.25 * this.dtNom) this.dtNom = dtMittel;
+    }
+    this.tLive += this.dtNom;
+    const dtStep = this.dtNom;
+
+    this.win.push(aRaw); if (this.win.length > this.winMax) this.win.shift();
+    let ruhig = false;
+    if (this.win.length === this.winMax) {
+      const w = this.win;
+      const tol = this.biasOk ? 0.3 : 1.5;
+      const mw = mittel(w);
+      const abw = Math.abs(mw - this.bias);
+      const leise = stdabw(w) < STILL_STD;
+      const streng = leise && abw < RUHE_STRENG;
+      const locker = leise && RUHE_STRENG <= abw && abw < tol;
+      this.quietN = locker ? this.quietN + 1 : 0;
+      const dauer = this.quietN * this.dtNom;
+      this.calmN = (leise && abw < ABW_WEIT && Math.abs(this.vLive) >= V_RUHE) ? this.calmN + 1 : 0;
+      const calm = this.calmN * this.dtNom;
+      const vGlaubw = Math.abs(this.vLive) >= V_RUHE && Math.abs(this.vLive) >= VERTRAUEN_MIN * this.pfad;
+      ruhig = ((streng || dauer >= RUHE_LOCKER_S) && !vGlaubw) || calm > RUHE_MAX_S;
+      if (ruhig) {
+        if (!this.biasOk || dauer >= RUHE_LOCKER_S || calm > RUHE_MAX_S) { this.bias = mw; this.biasOk = true; }
+        else this.bias += BIAS_RATE * (mw - this.bias);
+      }
+    }
+    this.stillN = ruhig ? this.stillN + 1 : 0;
+
+    if (ruhig && !this.segAktiv) {
+      this.vLive = 0.0;
+      if (Math.abs(this.posLive) < POS_RESET || this.stillN * this.dtNom > 1.5) this.posLive = 0.0;
+      this.restPos = this.posLive;
+    }
+
+    const a = aRaw - this.bias;
+    this.pfad = ruhig ? 0.0 : this.pfad + Math.abs(a) * dtStep;
+    this.vLive += a * dtStep;
+    this.posLive += this.vLive * dtStep;
+    const F = this.mass * (a + G);
+    this.live.push([this.tLive, this.posLive, this.vLive, a, F, F * this.vLive]);
+    if (this.live.length > LIVE_MAX + 600) this.live.splice(0, this.live.length - LIVE_MAX);
+
+    if (!ruhig && !this.segAktiv && this.biasOk) {
+      this.segAktiv = true; this.biasStart = this.bias;
+      this.segA = this.win.map(x => x - this.biasStart);
+    } else if (this.segAktiv) {
+      this.segA.push(aRaw - this.biasStart);
+      if (ruhig) { this.segmentKorrigieren(); this.segAktiv = false; }
+    }
+  }
+
+  segmentKorrigieren() {
+    const a = this.segA, n = a.length, dt = this.dtNom;
+    if (n < 20 || n > this.live.length) return;
+    const v = integrieren(a, dt);
+    const vEnd = v[n - 1];
+    for (let j = 0; j < n; j++) v[j] -= vEnd * (j / (n - 1));
+    const pos = integrieren(v, dt);
+    if (Math.abs(pos[n - 1]) < POS_RESET) { const pe = pos[n - 1]; for (let j = 0; j < n; j++) pos[j] -= pe * (j / (n - 1)); }
+    for (let j = 0; j < n; j++) pos[j] += this.restPos;
+    const off = this.live.length - n;
+    for (let j = 0; j < n; j++) {
+      const F = this.mass * (a[j] + G);
+      this.live[off + j] = [this.live[off + j][0], pos[j], v[j], a[j], F, F * v[j]];
+    }
+    this.vLive = 0.0; this.posLive = pos[n - 1]; this.restPos = this.posLive;
+  }
+
+  // ---------- Kalibrierung ----------
+  startKalibrierung() { this.calib = []; }
+  endeKalibrierung() {
+    const d = this.calib; this.calib = null;
+    if (!d || d.length < 50) return { ok: false, text: "Kalibrierung fehlgeschlagen: zu wenige Daten." };
+    const m = [0, 1, 2].map(k => mittel(d.map(r => r[k])));
+    const s = [0, 1, 2].map(k => stdabw(d.map(r => r[k])));
+    if (s.some(x => x > 0.02)) return { ok: false, text: "Kalibrierung abgebrochen: Sensor war nicht ruhig." };
+    const scale = 1.0 / Math.hypot(m[0], m[1], m[2]);
+    if (!(scale > 0.9 && scale < 1.1)) return { ok: false, text: `Kalibrierung unplausibel (Faktor ${scale.toFixed(3)}) - nicht übernommen.` };
+    this.scale = scale;
+    return { ok: true, scale, text: `Kalibriert: Skalierungsfaktor ${scale.toFixed(4)} (gilt für neue Messungen).` };
+  }
+}
+</script>
+<script>"use strict";
+/* Kurvenanzeige: 5 gestapelte Diagramme auf einem Canvas, Touch-Zoom/Verschieben, Cursor, Vergrößern */
+const LABELS = ["Hub (m)", "v (m/s)", "a (m/s²)", "F (N)", "P (W)"];
+const KEYS = ["hub", "v", "a", "F", "P"];
+const NAMES = ["Hub", "v", "a", "F", "P"];
+const UNITS = ["m", "m/s", "m/s²", "N", "W"];
+const FMTD = [2, 2, 1, 0, 0];
+const MIN_SPAN = [0.1, 0.2, 1.0, 20.0, 50.0];
+
+function fmt4(x) {
+  if (x === null || x === undefined || !isFinite(x)) return "-";
+  let s;
+  if (Math.abs(x) < 1e-6) s = "0.000";
+  else {
+    const exp = parseInt(x.toExponential(3).split("e")[1], 10);
+    s = x.toFixed(Math.max(0, 3 - exp));
+  }
+  return s.replace(".", ",");
+}
+function niceStep(range, n) {
+  const raw = range / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
+}
+function ticks(lo, hi, n) {
+  const st = niceStep(hi - lo, n), out = [];
+  for (let v = Math.ceil(lo / st) * st; v <= hi + st * 1e-9; v += st) out.push(Math.abs(v) < st * 1e-9 ? 0 : v);
+  return { out, st };
+}
+function fmtTick(v, st) {
+  const d = Math.max(0, -Math.floor(Math.log10(st) + 1e-9));
+  return v.toFixed(Math.min(d, 4)).replace(".", ",");
+}
+function lowerBound(a, x) { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; } return lo; }
+
+class Plot {
+  constructor(canvas, onChange) {
+    this.c = canvas; this.ctx = canvas.getContext("2d"); this.onChange = onChange || (() => {});
+    this.mode = "empty"; this.t = []; this.ys = [[], [], [], [], []]; this.reps = [];
+    this.xlim = [0, 1]; this.full = [0, 1]; this.gross = null; this.zahlenAus = false; this.cursor = null;
+    this.ptrs = new Map(); this.lastTap = { t: 0, x: 0, y: 0 }; this.moved = false;
+    this.pending = false;
+    canvas.style.touchAction = "none";
+    canvas.addEventListener("pointerdown", e => this.down(e));
+    canvas.addEventListener("pointermove", e => this.move(e));
+    canvas.addEventListener("pointerup", e => this.up(e));
+    canvas.addEventListener("pointercancel", e => { this.ptrs.delete(e.pointerId); });
+    canvas.addEventListener("wheel", e => { e.preventDefault(); this.zoomAt(this.pxToT(e.offsetX), e.deltaY > 0 ? 1.25 : 0.8); }, { passive: false });
+    new ResizeObserver(() => this.resize()).observe(canvas);
+    this.resize();
+  }
+  css(name, fb) { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || fb; }
+  resize() {
+    const r = this.c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+    this.W = Math.max(50, r.width); this.H = Math.max(50, r.height); this.dpr = d;
+    this.c.width = Math.round(this.W * d); this.c.height = Math.round(this.H * d);
+    this.draw();
+  }
+  // ---- Daten ----
+  setEmpty() { this.mode = "empty"; this.t = []; this.ys = [[], [], [], [], []]; this.reps = []; this.cursor = null; this.gross = null; this.draw(); }
+  setLive(t, ys) {
+    this.mode = "live"; this.t = t; this.ys = ys; this.reps = [];
+    const tn = t.length ? t[t.length - 1] : 0; this.xlim = [tn - 10, tn]; this.cursor = null; this.draw();
+  }
+  setResult(res, keepView) {
+    const behalten = keepView && this.mode === "result";
+    const xl = this.xlim.slice();
+    this.mode = "result"; this.t = res.t; this.ys = KEYS.map(k => res[k]); this.reps = res.reps;
+    this.full = [res.t[0], res.t[res.t.length - 1]];
+    this.xlim = behalten ? xl : this.full.slice();
+    if (!behalten) { this.cursor = null; this.gross = null; }
+    this.draw();
+  }
+  resetZoom() { if (this.mode === "result") { this.xlim = this.full.slice(); this.draw(); } }
+  // ---- Geometrie ----
+  panels() {
+    const top = 4, bottom = 20, h = this.H - top - bottom;
+    if (this.gross !== null) return [{ i: this.gross, y0: top, y1: top + h }];
+    const ph = h / 5;
+    return [0, 1, 2, 3, 4].map(i => ({ i, y0: top + i * ph, y1: top + (i + 1) * ph }));
+  }
+  get L() { return 44; }
+  get R() { return 6; }
+  tToPx(t) { return this.L + (t - this.xlim[0]) / (this.xlim[1] - this.xlim[0]) * (this.W - this.L - this.R); }
+  pxToT(x) { return this.xlim[0] + (x - this.L) / (this.W - this.L - this.R) * (this.xlim[1] - this.xlim[0]); }
+  yRange(i, i0, i1) {
+    const y = this.ys[i]; let lo = Infinity, hi = -Infinity;
+    for (let k = i0; k < i1; k++) { const v = y[k]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    if (this.mode === "live") { const pad = Math.max((hi - lo) * 0.1, MIN_SPAN[i]); return [lo - pad, hi + pad]; }
+    let span = hi - lo; if (span < 1e-9) span = 1;
+    return [lo - span * 0.12, hi + span * 0.3];
+  }
+  // ---- Zeichnen ----
+  draw() {
+    if (this.pending) return; this.pending = true;
+    requestAnimationFrame(() => { this.pending = false; this.paint(); });
+  }
+  paint() {
+    const ctx = this.ctx; ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const bg = this.css("--plot-bg", "#fff"), fg = this.css("--plot-fg", "#222"), grid = this.css("--plot-grid", "#ddd"),
+      line = this.css("--plot-line", "#1f77b4"), acc = this.css("--plot-acc", "#d62728"), span = this.css("--plot-span", "rgba(255,127,14,0.16)");
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, this.W, this.H);
+    ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle";
+    const pan = this.panels(), xr = this.W - this.R;
+    if (this.mode === "empty" || !this.t.length) {
+      ctx.fillStyle = fg; ctx.globalAlpha = 0.6; ctx.textAlign = "center"; ctx.font = "14px system-ui, sans-serif";
+      ctx.fillText(this.mode === "empty" ? "Noch keine Messung." : "Warte auf Daten ...", this.W / 2, this.H / 2); ctx.globalAlpha = 1; return;
+    }
+    const t = this.t, i0 = Math.max(0, lowerBound(t, this.xlim[0]) - 1), i1 = Math.min(t.length, lowerBound(t, this.xlim[1]) + 1);
+    this.hit = [];
+    for (const p of pan) {
+      const i = p.i, [ylo, yhi] = this.yRange(i, i0, i1), y2px = v => p.y1 - (v - ylo) / (yhi - ylo) * (p.y1 - p.y0);
+      this.hit.push({ i, y0: p.y0, y1: p.y1, ylo, yhi });
+      ctx.save(); ctx.beginPath(); ctx.rect(this.L, p.y0, xr - this.L, p.y1 - p.y0); ctx.clip();
+      // Wiederholungsfenster
+      ctx.fillStyle = span;
+      for (const r of this.reps) { const x0 = this.tToPx(t[r.s]), x1 = this.tToPx(t[Math.min(r.e, t.length) - 1]); ctx.fillRect(x0, p.y0, x1 - x0, p.y1 - p.y0); }
+      // Gitter
+      const ty = ticks(ylo, yhi, Math.max(2, Math.round((p.y1 - p.y0) / 38)));
+      ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.beginPath();
+      for (const v of ty.out) { const y = Math.round(y2px(v)) + 0.5; ctx.moveTo(this.L, y); ctx.lineTo(xr, y); }
+      const tx = ticks(this.xlim[0], this.xlim[1], Math.max(3, Math.round((xr - this.L) / 70)));
+      for (const v of tx.out) { const x = Math.round(this.tToPx(v)) + 0.5; ctx.moveTo(x, p.y0); ctx.lineTo(x, p.y1); }
+      ctx.stroke();
+      // Kurve (pro Pixelspalte Min/Max)
+      const y = this.ys[i]; ctx.strokeStyle = line; ctx.lineWidth = 1.4; ctx.beginPath();
+      const wpx = xr - this.L;
+      if (i1 - i0 > wpx * 3) {
+        let col = -1, mn = 0, mx = 0, first = true;
+        const flush = () => { if (col < 0) return; const x = this.L + col + 0.5; if (first) { ctx.moveTo(x, y2px(mn)); first = false; } else ctx.lineTo(x, y2px(mn)); ctx.lineTo(x, y2px(mx)); };
+        for (let k = i0; k < i1; k++) {
+          const c = Math.floor(this.tToPx(t[k]) - this.L);
+          if (c !== col) { flush(); col = c; mn = mx = y[k]; } else { if (y[k] < mn) mn = y[k]; if (y[k] > mx) mx = y[k]; }
+        }
+        flush();
+      } else {
+        for (let k = i0; k < i1; k++) { const x = this.tToPx(t[k]), yy = y2px(y[k]); if (k === i0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); }
+      }
+      ctx.stroke();
+      ctx.restore();
+      // Spitzen: Dreieck + Zahl
+      if (this.reps.length || this.mode === "result") {
+        const peaks = [];
+        for (const r of this.reps) { let jm = r.s; for (let k = r.s; k < r.e; k++) if (y[k] > y[jm]) jm = k; peaks.push({ j: jm, val: i === 0 ? r.hub : y[jm], nr: r.nr }); }
+        if (!peaks.length) { let jm = 0; for (let k = 0; k < y.length; k++) if (y[k] > y[jm]) jm = k; peaks.push({ j: jm, val: y[jm], nr: 1 }); }
+        ctx.fillStyle = acc; ctx.textAlign = "center";
+        const placed = [];
+        for (const pk of peaks) {
+          const x = this.tToPx(t[pk.j]), yy = y2px(y[pk.j]);
+          if (x < this.L || x > xr) continue;
+          ctx.beginPath(); ctx.moveTo(x - 4, yy - 7); ctx.lineTo(x + 4, yy - 7); ctx.lineTo(x, yy - 1); ctx.closePath(); ctx.fill();
+          if (this.zahlenAus) continue;
+          let txt = (peaks.length > 1 ? pk.nr + ": " : "") + pk.val.toFixed(FMTD[i]).replace(".", ",");
+          const w = ctx.measureText(txt).width; let tx0 = x, ty0 = yy - 15, al = "center";
+          if (ty0 - 6 < p.y0) { ty0 = yy + 2 > p.y0 + 6 ? Math.max(p.y0 + 7, yy) : p.y0 + 7; if (x + 8 + w < xr) { tx0 = x + 8; al = "left"; } else { tx0 = x - 8; al = "right"; } }
+          ctx.textAlign = al; ctx.fillText(txt, tx0, ty0);
+        }
+      }
+      // Achsenbeschriftung
+      ctx.fillStyle = fg; ctx.textAlign = "right";
+      for (const v of ty.out) { const y = y2px(v); if (y > p.y0 + 5 && y < p.y1 - 5) ctx.fillText(fmtTick(v, ty.st), this.L - 4, y); }
+      ctx.textAlign = "left"; ctx.globalAlpha = 0.75; ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.fillText(LABELS[i], this.L + 4, p.y0 + 8); ctx.font = "11px system-ui, sans-serif"; ctx.globalAlpha = 1;
+      ctx.strokeStyle = fg; ctx.globalAlpha = 0.5; ctx.strokeRect(this.L + 0.5, p.y0 + 0.5, xr - this.L - 1, p.y1 - p.y0 - 1); ctx.globalAlpha = 1;
+      // X-Beschriftung unter dem letzten Diagramm
+      if (p === pan[pan.length - 1]) {
+        ctx.fillStyle = fg; ctx.textAlign = "center";
+        for (const v of tx.out) { const x = this.tToPx(v); if (x > this.L + 8 && x < xr - 8) ctx.fillText(fmtTick(v, tx.st), x, p.y1 + 10); }
+        ctx.textAlign = "right"; ctx.fillText("s", this.W - 2, p.y1 + 10);
+      }
+    }
+    // Cursor
+    if (this.cursor !== null && this.mode === "result") {
+      const x = this.tToPx(this.cursor);
+      if (x >= this.L && x <= xr) { ctx.strokeStyle = acc; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, pan[0].y0); ctx.lineTo(x, pan[pan.length - 1].y1); ctx.stroke(); ctx.setLineDash([]); }
+    }
+  }
+  // ---- Cursorwerte ----
+  cursorValues() {
+    if (this.cursor === null || !this.t.length) return null;
+    let k = lowerBound(this.t, this.cursor); if (k > 0 && (k >= this.t.length || this.cursor - this.t[k - 1] < this.t[k] - this.cursor)) k--;
+    k = Math.max(0, Math.min(this.t.length - 1, k));
+    return { t: this.t[k], vals: this.ys.map(y => y[k]) };
+  }
+  // ---- Bedienung ----
+  zoomAt(tc, f) {
+    if (this.mode !== "result") return;
+    let [a, b] = this.xlim; let span = (b - a) * f;
+    const minSpan = 0.3, maxSpan = this.full[1] - this.full[0];
+    span = Math.max(minSpan, Math.min(maxSpan, span));
+    const rel = (tc - a) / (b - a); a = tc - rel * span; b = a + span; this.setX(a, b);
+  }
+  setX(a, b) {
+    const span = b - a;
+    if (a < this.full[0]) { a = this.full[0]; b = a + span; }
+    if (b > this.full[1]) { b = this.full[1]; a = b - span; }
+    this.xlim = [Math.max(a, this.full[0]), Math.min(b, this.full[1])]; this.draw();
+  }
+  panelAt(y) { for (const h of this.hit || []) if (y >= h.y0 && y <= h.y1) return h.i; return null; }
+  down(e) {
+    this.c.setPointerCapture(e.pointerId);
+    this.ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY, x0: e.offsetX, y0: e.offsetY });
+    this.moved = false; this.pinch = null;
+    if (this.ptrs.size === 2) { const [p, q] = [...this.ptrs.values()]; this.pinch = { d: Math.abs(p.x - q.x) || 1, a: this.xlim[0], b: this.xlim[1], tc: this.pxToT((p.x + q.x) / 2) }; this.moved = true; }
+  }
+  move(e) {
+    const p = this.ptrs.get(e.pointerId); if (!p || this.mode !== "result") return;
+    const dx = e.offsetX - p.x; p.x = e.offsetX; p.y = e.offsetY;
+    if (this.ptrs.size >= 2 && this.pinch) {
+      const [a, b] = [...this.ptrs.values()]; const d = Math.abs(a.x - b.x) || 1;
+      const span = Math.max(0.3, Math.min(this.full[1] - this.full[0], (this.pinch.b - this.pinch.a) * this.pinch.d / d));
+      const mid = (a.x + b.x) / 2, rel = (mid - this.L) / (this.W - this.L - this.R);
+      this.setX(this.pinch.tc - rel * span, this.pinch.tc - rel * span + span); return;
+    }
+    if (Math.abs(e.offsetX - p.x0) > 6 || Math.abs(e.offsetY - p.y0) > 6) this.moved = true;
+    if (this.moved && this.ptrs.size === 1) { const s = (this.xlim[1] - this.xlim[0]) / (this.W - this.L - this.R); this.setX(this.xlim[0] - dx * s, this.xlim[1] - dx * s); }
+  }
+  up(e) {
+    const p = this.ptrs.get(e.pointerId); this.ptrs.delete(e.pointerId);
+    if (!p || this.moved || this.mode !== "result") return;
+    const now = performance.now(), dbl = now - this.lastTap.t < 350 && Math.hypot(e.offsetX - this.lastTap.x, e.offsetY - this.lastTap.y) < 25;
+    this.lastTap = { t: dbl ? 0 : now, x: e.offsetX, y: e.offsetY };
+    if (dbl) { const i = this.panelAt(e.offsetY); this.gross = (this.gross !== null) ? null : i; this.draw(); this.onChange(); return; }
+    this.cursor = this.pxToT(e.offsetX); this.draw(); this.onChange();
+  }
+}
+
+/* Balkendiagramme (v_max, F_max, P_max je Wiederholung) */
+function drawBars(canvas, reps, key, title, dec) {
+  const d = window.devicePixelRatio || 1, r = canvas.getBoundingClientRect();
+  canvas.width = Math.round(r.width * d); canvas.height = Math.round(r.height * d);
+  const ctx = canvas.getContext("2d"); ctx.setTransform(d, 0, 0, d, 0, 0);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  ctx.fillStyle = css("--plot-bg") || "#fff"; ctx.fillRect(0, 0, r.width, r.height);
+  ctx.fillStyle = css("--plot-fg") || "#222"; ctx.font = "bold 12px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.fillText(title, 8, 6);
+  if (!reps.length) return;
+  const vals = reps.map(p => p[key]), mx = Math.max(...vals), n = reps.length, W = r.width - 16, bw = W / n, H = r.height - 52;
+  ctx.font = `${n > 20 ? 8 : 10}px system-ui, sans-serif`; ctx.textAlign = "center";
+  reps.forEach((p, k) => {
+    const h = mx > 0 ? p[key] / mx * H : 0, x = 8 + k * bw;
+    ctx.fillStyle = p[key] === mx ? (css("--plot-good") || "#2ca02c") : (css("--plot-line") || "#1f77b4");
+    ctx.fillRect(x + bw * 0.12, 30 + H - h, bw * 0.76, h);
+    ctx.fillStyle = css("--plot-fg") || "#222"; ctx.textBaseline = "bottom";
+    if (bw > 22 || n <= 14) ctx.fillText(p[key].toFixed(dec).replace(".", ","), x + bw / 2, 30 + H - h - 1);
+    ctx.textBaseline = "top"; if (n <= 30 || k % 2 === 0) ctx.fillText(String(p.nr), x + bw / 2, 34 + H);
+  });
+}
+</script>
+<script>"use strict";
+const $ = id => document.getElementById(id);
+const MODES = ["Aus (nur Z-Achse)", "Sensorwinkel", "Gyro-Filter (Drehungen)"];
+const LIVE_SECONDS = 10;
+const PYODIDE_BASE = new URLSearchParams(location.search).get("pyodide") || "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
+
+const S = { sensor: null, state: "idle", samples: [], samplesHz: null, res: null, manual: false, liveOn: false, job: null, wake: null };
+let plot, worker, workerReady, msgId = 0;
+const pending = new Map();
+
+// ---------- Hilfen ----------
+function status(t) { $("status").textContent = String(t).replace(/(\d)\.(\d)/g, "$1,$2"); }
+function warn(t) { $("warn").textContent = t || ""; $("warn").hidden = !t; }
+function speichere() { try { localStorage.setItem("ek", JSON.stringify({ masse: $("masse").value, dauer: $("dauer").value, korr: $("korr").value, filter: $("filter").value, scale: S.sensor ? S.sensor.scale : S.scale })); } catch (e) { /* ignorieren */ } }
+function lade() { try { const c = JSON.parse(localStorage.getItem("ek") || "{}"); if (c.masse) $("masse").value = c.masse; if (c.dauer) $("dauer").value = c.dauer; if (c.korr) $("korr").value = c.korr; if (c.filter) $("filter").value = c.filter; if (c.scale) S.scale = c.scale; } catch (e) { /* ignorieren */ } }
+function download(name, text, type = "text/csv") {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+function masse() { const m = parseFloat(String($("masse").value).replace(",", ".")); return m > 0 ? m : null; }
+function dauer() { const d = parseFloat(String($("dauer").value).replace(",", ".")); return d >= 2 && d <= 600 ? d : null; }
+
+// ---------- Worker ----------
+function startWorker() {
+  const code = $("worker-src").textContent;
+  worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+  worker.onmessage = e => { const p = pending.get(e.data.id); if (!p) return; pending.delete(e.data.id); e.data.ok ? p.res(e.data.out) : p.rej(new Error(e.data.err)); };
+  worker.onerror = e => status("Fehler im Auswertungsmodul: " + (e.message || e));
+  workerReady = call("init", { base: PYODIDE_BASE, src: $("analyse-py").textContent }).then(o => { $("engine").textContent = o.scipyOk ? "Auswertung bereit" : "Auswertung bereit (ohne scipy)"; $("engine").className = "ok"; return o; })
+    .catch(err => { $("engine").textContent = "Auswertung nicht verfügbar: " + err.message; $("engine").className = "bad"; throw err; });
+}
+function call(cmd, args, transfer) { return new Promise((res, rej) => { const id = ++msgId; pending.set(id, { res, rej }); worker.postMessage({ id, cmd, args }, transfer || []); }); }
+
+// ---------- Auswerten ----------
+async function auswerten(extra = "", fenster = null) {
+  const m = masse(); if (!m) { status("Bitte eine gültige Masse eintragen."); return false; }
+  if (S.samples.length < 50) return false;
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten";
+  let modus = MODES.indexOf($("korr").value); if (modus < 0) modus = 1;
+  if (modus === 2 && S.samples[0].length < 8) { modus = 1; extra += " [keine Gyro-Daten -> Sensorwinkel verwendet]"; }
+  const grenz = $("filter").value === "Aus" ? null : parseFloat($("filter").value);
+  const ncols = S.samples[0].length, buf = new Float64Array(S.samples.length * ncols);
+  S.samples.forEach((r, i) => buf.set(r, i * ncols));
+  status("Werte aus ..."); setBusy(true);
+  try {
+    await workerReady;
+    const out = await call("eval", { par: { ncols, masse: m, modus, grenz, hz: S.samplesHz, fenster }, buf });
+    S.manual = fenster !== null;
+    zeigeErgebnis(JSON.parse(out));
+    const r = S.res;
+    const pmax = Math.max(...r.P);
+    status(`[${MODES[modus]}] ${r.reps.length} Wiederholung(en), Spitzenleistung ${pmax.toFixed(0)} W, Drift am Ende ${r.drift.toFixed(2)} m/s${extra}`);
+    return true;
+  } catch (e) { status("Fehler bei der Auswertung: " + e.message); return false; }
+  finally { setBusy(false); }
+}
+function setBusy(b) { document.body.classList.toggle("busy", b); }
+
+function zeigeErgebnis(res, keepView = false) {
+  S.res = res; plot.setResult(res, keepView); $("sets").open = false;
+  warn(res.warn.join("  |  "));
+  fuelleReps(res.reps); aktualisiereKnoepfe(); cursorAnzeige();
+}
+function fuelleReps(reps) {
+  const tb = $("repBody"); tb.innerHTML = "";
+  for (const r of reps) {
+    const tr = document.createElement("tr");
+    [r.nr, r.t_start.toFixed(2), r.dauer.toFixed(2), r.hub.toFixed(2), r.a_max.toFixed(1), r.v_max.toFixed(2), r.v_mean.toFixed(2), r.F_max.toFixed(0), r.F_mean.toFixed(0), r.P_max.toFixed(0), r.P_mean.toFixed(0), r.dv.toFixed(1), r.dF.toFixed(1), r.dP.toFixed(1)]
+      .forEach(v => { const td = document.createElement("td"); td.textContent = String(v).replace(".", ","); tr.appendChild(td); });
+    tb.appendChild(tr);
+  }
+  const sm = $("summary");
+  if (!reps.length) sm.textContent = `Keine Wiederholung erkannt (Aufwärtsgeschwindigkeit < ${(S.res.vmin).toString().replace(".", ",")} m/s).`;
+  else if (reps.length > 1) { const l = reps[reps.length - 1]; sm.textContent = `${reps.length} Wiederholungen. Letzte vs. beste: Spitzengeschwindigkeit -${l.dv.toFixed(1)} %, Spitzenkraft -${l.dF.toFixed(1)} %, Spitzenleistung -${l.dP.toFixed(1)} %`.replace(/(\d)\.(\d)/g, "$1,$2"); }
+  else sm.textContent = "1 Wiederholung erkannt.";
+  zeichneBalken();
+}
+function zeichneBalken() {
+  if (!S.res || $("tab-reps").hidden) return;
+  const reps = S.res.reps;
+  drawBars($("bar1"), reps, "v_max", "Spitzengeschwindigkeit (m/s)", 2);
+  drawBars($("bar2"), reps, "F_max", "Spitzenkraft (N)", 0);
+  drawBars($("bar3"), reps, "P_max", "Spitzenleistung (W)", 0);
+}
+function cursorAnzeige() {
+  const c = plot.cursorValues(), el = $("cursor");
+  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte anzeigen · Doppeltippen: Diagramm vergrößern" : ""; return; }
+  const idx = plot.gross !== null ? [plot.gross] : [0, 1, 2, 3, 4];
+  el.textContent = `t = ${fmt4(c.t)} s   ` + idx.map(i => `${NAMES[i]} = ${fmt4(c.vals[i])} ${UNITS[i]}`).join("   ");
+}
+
+// ---------- Live-Anzeige ----------
+let liveN = -1;
+function liveTick() {
+  const s = S.sensor;
+  if (s && s.connected) {
+    s.mass = masse() || s.mass;
+    if (plot.mode !== "result" && (S.liveOn || S.state === "countdown" || S.state === "recording") && s.frames !== liveN) {
+      liveN = s.frames;
+      const L = s.live; if (L.length) {
+        const tn = L[L.length - 1][0]; let k = L.length - 1; while (k > 0 && L[k - 1][0] > tn - LIVE_SECONDS) k--;
+        const step = Math.max(1, Math.floor((L.length - k) / 600)), t = [], ys = [[], [], [], [], []];
+        for (let j = k; j < L.length; j += step) { const r = L[j]; t.push(r[0]); for (let c = 0; c < 5; c++) ys[c].push(r[c + 1]); }
+        plot.setLive(t, ys);
+      }
+    }
+  }
+  setTimeout(liveTick, 90);
+}
+function toggleLive() {
+  if (!S.sensor || !S.sensor.connected) return;
+  if (S.liveOn) { S.liveOn = false; $("btnLive").textContent = "Live-Daten"; status("Live-Anzeige gestoppt"); return; }
+  S.sensor.resetLive(); plot.setEmpty(); plot.mode = "live"; S.liveOn = true; liveN = -1;
+  $("btnLive").textContent = "Live stoppen"; status("Live-Anzeige läuft"); zeigeTab("curves");
+}
+
+// ---------- Verbinden ----------
+async function verbinden() {
+  if (!navigator.bluetooth) { status("Dieser Browser unterstützt kein Web Bluetooth. Bitte Chrome auf Android verwenden."); return; }
+  S.sensor = new Sensor((kind, val) => {
+    if (kind === "status") status(val);
+    else if (kind === "disconnected") {
+      const aktiv = S.state === "countdown" || S.state === "recording";
+      if (aktiv) stopManuell();
+      S.liveOn = false; $("btnLive").textContent = "Live-Daten"; setVerbunden(false); status(aktiv ? val + " | " + $("status").textContent : val);
+    }
+  });
+  S.sensor.scale = S.scale || 1.0;
+  try {
+    $("btnConnect").disabled = true;
+    await S.sensor.connect($("alle").checked);
+    $("rate").value = "100"; setVerbunden(true); status(`Verbunden mit ${S.sensor.device.name || "Sensor"}`);
+    try { if (navigator.wakeLock) S.wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignorieren */ }
+  } catch (e) {
+    $("btnConnect").disabled = false;
+    status(e.name === "NotFoundError" ? "Kein Sensor ausgewählt." : "Verbindung fehlgeschlagen: " + (e.message || e));
+  }
+}
+document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && S.sensor && S.sensor.connected && navigator.wakeLock) { try { S.wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignorieren */ } } });
+function setVerbunden(v) {
+  $("btnConnect").disabled = v;
+  for (const id of ["btnLive", "btnStart", "btnCal", "rate"]) $(id).disabled = !v;
+  $("btnStop").disabled = true;
+}
+async function kalibrieren() {
+  if (!S.sensor || S.state !== "idle") return;
+  S.state = "cal"; setSperre(true); S.sensor.startKalibrierung(); status("Kalibrierung: Sensor 3 s ruhig hinlegen ...");
+  await new Promise(r => setTimeout(r, 3000));
+  const r = S.sensor.endeKalibrierung(); status(r.text); if (r.ok) { S.scale = r.scale; speichere(); }
+  S.state = "idle"; setSperre(false);
+}
+function setSperre(b) { for (const id of ["btnLive", "btnStart", "btnCal", "rate"]) $(id).disabled = b; $("btnStop").disabled = !b || S.state === "cal"; }
+
+// ---------- Messung ----------
+function start() {
+  const s = S.sensor; if (!s || !s.connected) { status("Nicht verbunden."); return; }
+  const m = masse(), d = dauer(); if (!m) { status("Bitte eine gültige Masse eintragen."); return; } if (!d) { status("Dauer: 2 bis 600 Sekunden."); return; }
+  speichere(); $("sets").open = false; s.mass = m; S.liveOn = false; $("btnLive").textContent = "Live-Daten";
+  plot.setEmpty(); plot.mode = "live"; liveN = -1; s.resetLive(); zeigeTab("curves");
+  S.state = "countdown"; setSperre(true); countdown(3, d);
+}
+function countdown(n, d) {
+  if (n > 0) { status(`Sensor ruhig halten ... Start in ${n}`); S.job = setTimeout(() => countdown(n - 1, d), 1000); }
+  else { S.sensor.rec = []; S.sensor.recording = true; S.state = "recording"; status("Messung läuft ..."); S.job = setTimeout(stop, d * 1000); }
+}
+function stopManuell() {
+  clearTimeout(S.job); S.job = null;
+  if (S.state === "countdown") { S.state = "idle"; setSperre(false); setVerbunden(S.sensor && S.sensor.connected); status("Messung abgebrochen"); return; }
+  stop();
+}
+function stop() {
+  if (S.state !== "recording") return;
+  S.job = null; S.sensor.recording = false; S.state = "idle"; setSperre(false); setVerbunden(S.sensor.connected);
+  S.samples = S.sensor.rec.slice(); S.samplesHz = S.sensor.hz;
+  if (S.samples.length < 50) { status("Zu wenige Daten empfangen."); return; }
+  const dauerS = S.samples[S.samples.length - 1][0] - S.samples[0][0], hz = S.samples.length / dauerS;
+  auswerten(` (${dauerS.toFixed(1)} s aufgenommen, ~${hz.toFixed(0)} Hz)`);
+}
+async function neuAuswerten() {
+  let fenster = null;
+  if (S.manual && S.res && S.res.reps.length) {
+    const beh = confirm("Die Wiederholungsfenster wurden manuell angepasst.\n\nOK = Fenster beibehalten\nAbbrechen = Fenster neu automatisch erkennen");
+    if (beh) fenster = S.res.reps.map(r => [r.s * S.res.dt, r.e * S.res.dt]);
+  }
+  auswerten("", fenster);
+}
+function zuruecksetzen() {
+  if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false;
+  if (S.sensor) S.sensor.resetLive();
+  plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); status("Zurückgesetzt");
+}
+function aktualisiereKnoepfe() { const has = !!S.res; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
+
+// ---------- Speichern / Laden / Export ----------
+function speichern() {
+  if (!S.samples.length) return;
+  const res = S.res; let h = `# masse=${masse() ?? ""}\n# korrektur=${MODES.indexOf($("korr").value)}\n# filter=${$("filter").value}\n`;
+  if (res) {
+    h += `# hz=${res.hz}\n`;
+    if (res.reps.length) h += "# reps=" + res.reps.map(r => `${(r.s * res.dt).toFixed(4)}:${(r.e * res.dt).toFixed(4)}`).join(";") + `\n# reps_manuell=${S.manual ? 1 : 0}\n`;
+  }
+  const head = ["t", "ax_g", "ay_g", "az_g", "az_welt_g", "gx_dps", "gy_dps", "gz_dps"].slice(0, S.samples[0].length).join(",");
+  const rows = S.samples.map(r => r.map((x, i) => i === 0 ? x.toFixed(6) : x.toFixed(5)).join(","));
+  download(`messung_${stamp()}.csv`, h + head + "\n" + rows.join("\n") + "\n");
+  status("Messung als Datei gespeichert (Ordner „Downloads“).");
+}
+async function laden(file) {
+  try {
+    const txt = await file.text(), meta = {}, rows = [];
+    for (const line of txt.split(/\r?\n/)) {
+      if (line.startsWith("#")) { const i = line.indexOf("="); if (i > 0) meta[line.slice(1, i).trim()] = line.slice(i + 1).trim(); }
+      else if (line.trim()) rows.push(line);
+    }
+    const data = rows.slice(1).map(l => l.split(",").map(Number));
+    if (data.length < 50 || data.some(r => r.some(x => !isFinite(x)))) throw new Error("Datei enthält zu wenige oder ungültige Messpunkte.");
+    S.res = null; S.samples = data; S.samplesHz = /^\d+$/.test(meta.hz || "") ? parseInt(meta.hz, 10) : null;
+    if (meta.masse) $("masse").value = meta.masse;
+    if (meta.korrektur !== undefined && MODES[+meta.korrektur]) $("korr").value = MODES[+meta.korrektur];
+    if (["Aus", "10", "20", "30", "50"].includes(meta.filter)) $("filter").value = meta.filter;
+    let fenster = null;
+    if (meta.reps && (meta.reps_manuell ?? "1") === "1") fenster = meta.reps.split(";").map(p => { const [a, b] = p.split(":"); return (a.includes(".") || b.includes(".")) ? [parseFloat(a), parseFloat(b)] : [parseInt(a, 10) * 0.01, parseInt(b, 10) * 0.01]; });
+    zeigeTab("curves"); await auswerten(` - geladen: ${file.name}`, fenster);
+  } catch (e) { status("Fehler beim Laden: " + e.message); }
+}
+function exportTabelle() {
+  const res = S.res; if (!res || !res.reps.length) return;
+  const f = (x, d) => x.toFixed(d);
+  const lines = ["Wdh,Start_s,Dauer_s,Hub_m,a_max,v_max,v_mean,F_max,F_mean,P_max,P_mean,v_Abfall_%,F_Abfall_%,P_Abfall_%"].concat(res.reps.map(r =>
+    [r.nr, f(r.t_start, 3), f(r.dauer, 3), f(r.hub, 3), f(r.a_max, 2), f(r.v_max, 3), f(r.v_mean, 3), f(r.F_max, 1), f(r.F_mean, 1), f(r.P_max, 1), f(r.P_mean, 1), f(r.dv, 1), f(r.dF, 1), f(r.dP, 1)].join(",")));
+  download(`wiederholungen_${stamp()}.csv`, "﻿" + lines.join("\n") + "\n"); status("Tabelle als Datei gespeichert (Ordner „Downloads“).");
+}
+
+// ---------- Oberfläche ----------
+function zeigeTab(name) {
+  $("tab-curves").hidden = name !== "curves"; $("tab-reps").hidden = name !== "reps";
+  $("tbCurves").classList.toggle("on", name === "curves"); $("tbReps").classList.toggle("on", name === "reps");
+  if (name === "curves") plot.resize(); else zeichneBalken();
+}
+function init() {
+  lade(); plot = new Plot($("plot"), cursorAnzeige); plot.setEmpty(); cursorAnzeige();
+  $("btnConnect").onclick = verbinden; $("btnCal").onclick = kalibrieren; $("btnLive").onclick = toggleLive;
+  $("btnStart").onclick = start; $("btnStop").onclick = stopManuell;
+  $("btnSave").onclick = speichern; $("btnExport").onclick = exportTabelle; $("btnReeval").onclick = neuAuswerten; $("btnReset").onclick = zuruecksetzen;
+  $("btnLoad").onclick = () => $("file").click(); $("file").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) laden(f); };
+  $("btnZoom").onclick = () => plot.resetZoom();
+  $("zahlen").onchange = e => { plot.zahlenAus = e.target.checked; plot.draw(); };
+  $("tbCurves").onclick = () => zeigeTab("curves"); $("tbReps").onclick = () => zeigeTab("reps");
+  $("rate").onchange = async () => { if (S.sensor && S.sensor.connected) { const hz = parseInt($("rate").value, 10); status(`Stelle Abtastrate auf ${hz} Hz ...`); try { await S.sensor.applyRate(hz); status(`Abtastrate: ${hz} Hz`); } catch (e) { status("Abtastrate konnte nicht gesetzt werden: " + e.message); } } };
+  $("masseHelp").onclick = () => alert("Für Kraft und Leistung zählt die gesamte bewegte Masse.\n\nBeispiel Kniebeuge/Bankdrücken: Hantel + anteiliges Körpergewicht (bei der Kniebeuge grob 80-90 % des Körpergewichts).\nBei Sprüngen: Körpergewicht (+ Zusatzlast).");
+  for (const id of ["masse", "dauer", "korr", "filter"]) $(id).onchange = speichere;
+  window.addEventListener("resize", zeichneBalken);
+  setVerbunden(false); aktualisiereKnoepfe();
+  if (!navigator.bluetooth) { status("Hinweis: Dieser Browser unterstützt kein Bluetooth (Chrome auf Android verwenden). Laden und Auswerten von Dateien geht trotzdem."); $("btnConnect").disabled = true; }
+  startWorker(); liveTick();
+}
+window.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
