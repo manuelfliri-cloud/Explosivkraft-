@@ -81,6 +81,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
   <button id="btnReeval">Neu auswerten</button>
   <button id="btnReset">Zurücksetzen</button>
   <button id="btnUndo">Rückgängig</button>
+  <button id="btnEdge">Fenster verschieben</button>
   <button id="btnBox">Bereich markieren</button>
   <button id="btnZoom">Ganze Messung</button>
   <label class="chk"><input type="checkbox" id="zahlen"> Zahlen ausblenden</label>
@@ -914,7 +915,7 @@ class Plot {
     this.mode = "empty"; this.t = []; this.ys = [[], [], [], [], []]; this.reps = [];
     this.xlim = [0, 1]; this.full = [0, 1]; this.gross = null; this.zahlenAus = false; this.cursor = null;
     this.ptrs = new Map(); this.lastTap = { t: 0, x: 0, y: 0 }; this.moved = false;
-    this.pending = false; this.dt = 0.01; this.drag = null; this.boxMode = false; this.box = null; this.longTimer = null; this.longFired = false; this.onEdit = () => {};
+    this.pending = false; this.dt = 0.01; this.drag = null; this.boxMode = false; this.editEdges = false; this.box = null; this.longTimer = null; this.longFired = false; this.onEdit = () => {};
     canvas.style.touchAction = "none";
     canvas.addEventListener("pointerdown", e => this.down(e));
     canvas.addEventListener("pointermove", e => this.move(e));
@@ -1097,7 +1098,7 @@ class Plot {
       this.pinch = { d: Math.abs(p.x - q.x) || 1, a: this.xlim[0], b: this.xlim[1], tc: this.pxToT((p.x + q.x) / 2) }; this.moved = true; this.draw();
     } else if (this.mode === "result" && this.ptrs.size === 1) {
       if (this.boxMode) { const t = this.clampT(this.pxToT(e.offsetX)); this.box = { x0: t, x1: t, px0: e.offsetX }; return; }
-      const k = this.nearEdge(e.offsetX);
+      const k = this.editEdges ? this.nearEdge(e.offsetX) : null;
       if (k) { this.drag = { ...k, grenzen: this.reps.map(r => [r.s, r.e]) }; this.onEdit("status", `Verschiebe ${k.kante === "s" ? "Start" : "Ende"} von Wiederholung ${this.reps[k.i].nr} ...`); return; }
       const x = e.offsetX, y = e.offsetY;
       this.longTimer = setTimeout(() => { if (!this.moved && this.ptrs.size === 1) { this.longFired = true; this.onEdit("long", { x, y, t: this.pxToT(x) }); } }, 550);
@@ -1252,7 +1253,7 @@ function zeichneBalken() {
 }
 function cursorAnzeige() {
   const c = plot.cursorValues(), el = $("cursor");
-  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte · Doppeltippen: vergrößern · Fensterkante ziehen · lang drücken: Fenster löschen/hinzufügen" : ""; return; }
+  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte · Doppeltippen: vergrößern · lang drücken: Fenster löschen/hinzufügen · Kanten ziehen: Knopf „Fenster verschieben“" : ""; return; }
   const idx = plot.gross !== null ? [plot.gross] : [0, 1, 2, 3, 4];
   el.textContent = `t = ${fmt4(c.t)} s   ` + idx.map(i => `${NAMES[i]} = ${fmt4(c.vals[i])} ${UNITS[i]}`).join("   ");
 }
@@ -1354,11 +1355,11 @@ async function neuAuswerten() {
 }
 function zuruecksetzen() {
   if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
-  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus();
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus();
   if (S.sensor) S.sensor.resetLive();
   plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); status("Zurückgesetzt");
 }
-function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
+function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; $("btnEdge").disabled = !has; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
 
 // ---------- Speichern / Laden / Export ----------
 function speichern() {
@@ -1430,9 +1431,14 @@ function zeigeMenu(x, y, items) {
   m.style.top = Math.max(6, Math.min(window.innerHeight - h - 6, cr.top + y - h - 12)) + "px";
 }
 function schliesseMenu() { $("menu").hidden = true; }
+function kanteAus() { plot.editEdges = false; $("btnEdge").classList.remove("on"); }
+function kanteToggle() {
+  const an = !plot.editEdges; if (an) boxAus(); plot.editEdges = an; $("btnEdge").classList.toggle("on", an);
+  status(an ? "Fenster verschieben: Kante eines orangen Fensters ziehen. Zum Beenden den Knopf noch einmal tippen." : "Fenster verschieben ist aus.");
+}
 function boxAus() { S.box = false; plot.boxMode = false; plot.box = null; $("btnBox").classList.remove("on"); $("plot").style.cursor = ""; plot.draw(); }
 function boxToggle() {
-  S.box = !S.box; plot.boxMode = S.box; $("btnBox").classList.toggle("on", S.box);
+  S.box = !S.box; if (S.box) kanteAus(); plot.boxMode = S.box; $("btnBox").classList.toggle("on", S.box);
   if (S.box) status("Bereich markieren: mit dem Finger ein Stück der Zeitachse markieren (Verschieben ist dabei ausgeschaltet).");
   else boxAus();
 }
@@ -1474,7 +1480,7 @@ function zeigeTab(name) {
 }
 function init() {
   lade(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
-  $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle;
+  $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle;
   document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
   $("btnConnect").onclick = verbinden; $("btnCal").onclick = kalibrieren; $("btnLive").onclick = toggleLive;
