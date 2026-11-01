@@ -14,7 +14,7 @@
 @media (prefers-color-scheme:dark){:root{--bg:#12161b;--card:#1b2128;--fg:#e6ebf0;--mut:#9aa7b4;--line:#323b45;--pri:#4a9be8;--priT:#07121e;--bad:#ef6c6c;--ok:#6fcf74;
 --plot-bg:#1b2128;--plot-fg:#e6ebf0;--plot-grid:#2c353f;--plot-line:#5aa9f0;--plot-acc:#ff6b6b;--plot-span:rgba(255,167,38,.18);--plot-good:#6fcf74}}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html,body{overscroll-behavior-y:contain;margin:0;background:var(--bg);color:var(--fg);font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body{padding:8px 12px calc(12px + env(safe-area-inset-bottom));max-width:1100px;margin:0 auto}
 h1{font-size:18px;margin:4px 0 6px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px}
@@ -80,6 +80,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
   <button id="btnExport">Tabelle</button>
   <button id="btnReeval">Neu auswerten</button>
   <button id="btnReset">Zurücksetzen</button>
+  <button id="btnLast" disabled>Letzte Messung</button>
   <button id="btnUndo">Rückgängig</button>
   <button id="btnEdge">Fenster verschieben</button>
   <button id="btnBox">Bereich markieren</button>
@@ -1218,6 +1219,7 @@ async function auswerten(extra = "", fenster = null) {
     zeigeErgebnis(JSON.parse(out));
     const r = S.res;
     const pmax = Math.max(...r.P);
+    sichere(); $("btnLast").disabled = false;
     status(`[${MODES[modus]}] ${r.reps.length} Wiederholung(en), Spitzenleistung ${pmax.toFixed(0)} W, Drift am Ende ${r.drift.toFixed(2)} m/s${extra}`);
     return true;
   } catch (e) { status("Fehler bei der Auswertung: " + e.message); return false; }
@@ -1357,7 +1359,7 @@ function zuruecksetzen() {
   if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
   S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus();
   if (S.sensor) S.sensor.resetLive();
-  plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); status("Zurückgesetzt");
+  plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); loescheLetzte(); status("Zurückgesetzt");
 }
 function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; $("btnEdge").disabled = !has; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
 
@@ -1405,14 +1407,14 @@ function exportTabelle() {
 async function uebernehmeGrenzen(grenzen) {
   const res = S.res; if (!res) return;
   S.undo.push({ grenzen: res.reps.map(r => [r.s, r.e]), manual: S.manual }); if (S.undo.length > 50) S.undo.shift();
-  try { const out = await call("setze", { grenzen }); S.manual = true; zeigeErgebnis(JSON.parse(out), true); }
+  try { const out = await call("setze", { grenzen }); S.manual = true; zeigeErgebnis(JSON.parse(out), true); sichere(); }
   catch (e) { S.undo.pop(); status("Fehler: " + e.message); }
   aktualisiereKnoepfe();
 }
 async function rueckgaengig() {
   if (!S.undo.length || !S.res) return;
   const u = S.undo.pop();
-  try { const out = await call("setze", { grenzen: u.grenzen }); S.manual = u.manual; zeigeErgebnis(JSON.parse(out), true); const rest = S.undo.length; status("Änderung rückgängig gemacht" + (rest ? ` (${rest} weitere möglich).` : ".")); }
+  try { const out = await call("setze", { grenzen: u.grenzen }); S.manual = u.manual; zeigeErgebnis(JSON.parse(out), true); sichere(); const rest = S.undo.length; status("Änderung rückgängig gemacht" + (rest ? ` (${rest} weitere möglich).` : ".")); }
   catch (e) { status("Fehler: " + e.message); }
   aktualisiereKnoepfe();
 }
@@ -1472,6 +1474,29 @@ function plotEdit(typ, d) {
   }
 }
 
+
+// ---------- Letzte Messung sichern (übersteht versehentliches Neuladen) ----------
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open("ek-db", 1); r.onupgradeneeded = () => r.result.createObjectStore("m"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function sichere() {
+  try {
+    if (!S.samples.length) return; const db = await idb(), res = S.res;
+    const rec = { t: Date.now(), samples: S.samples, hz: S.samplesHz, masse: $("masse").value, korr: $("korr").value, filter: $("filter").value,
+      fenster: res && S.manual ? res.reps.map(r => [r.s * res.dt, r.e * res.dt]) : null };
+    db.transaction("m", "readwrite").objectStore("m").put(rec, "letzte");
+  } catch (e) { /* ignorieren */ }
+}
+async function holeLetzte() { try { const db = await idb(); return await new Promise(r => { const q = db.transaction("m").objectStore("m").get("letzte"); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); } catch (e) { return null; } }
+async function loescheLetzte() { try { const db = await idb(); db.transaction("m", "readwrite").objectStore("m").delete("letzte"); } catch (e) { /* ignorieren */ } $("btnLast").disabled = true; }
+async function stelleWiederHer(auto) {
+  const r = await holeLetzte(); if (!r) { status("Keine gesicherte Messung vorhanden."); return; }
+  S.samples = r.samples; S.samplesHz = r.hz; $("masse").value = r.masse; $("korr").value = r.korr; $("filter").value = r.filter;
+  zeigeTab("curves"); await auswerten(auto ? " - letzte Messung automatisch wiederhergestellt" : " - letzte Messung geladen", r.fenster);
+}
+async function startWiederherstellung() {
+  const r = await holeLetzte(); $("btnLast").disabled = !r;
+  if (r && Date.now() - r.t < 20 * 60 * 1000 && !S.samples.length && S.state === "idle") stelleWiederHer(true);
+}
+
 // ---------- Oberfläche ----------
 function zeigeTab(name) {
   $("tab-curves").hidden = name !== "curves"; $("tab-reps").hidden = name !== "reps";
@@ -1480,7 +1505,7 @@ function zeigeTab(name) {
 }
 function init() {
   lade(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
-  $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle;
+  $("btnLast").onclick = () => stelleWiederHer(false); $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle;
   document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
   $("btnConnect").onclick = verbinden; $("btnCal").onclick = kalibrieren; $("btnLive").onclick = toggleLive;
@@ -1496,7 +1521,8 @@ function init() {
   window.addEventListener("resize", zeichneBalken);
   setVerbunden(false); aktualisiereKnoepfe();
   if (!navigator.bluetooth) { status("Hinweis: Dieser Browser unterstützt kein Bluetooth (Chrome auf Android verwenden). Laden und Auswerten von Dateien geht trotzdem."); $("btnConnect").disabled = true; }
-  startWorker(); liveTick();
+  startWorker(); liveTick(); startWiederherstellung();
+  window.addEventListener("beforeunload", e => { if (S.state === "countdown" || S.state === "recording") { e.preventDefault(); e.returnValue = ""; } });
 }
 window.addEventListener("DOMContentLoaded", init);
 </script>
