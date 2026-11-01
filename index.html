@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1b6ec2">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Explosivkraft</title>
 <style>
 :root{--bg:#f4f6f8;--card:#fff;--fg:#1d2733;--mut:#5d6b7a;--line:#d5dbe1;--pri:#1b6ec2;--priT:#fff;--bad:#c62828;--ok:#2e7d32;
@@ -38,6 +41,10 @@ th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white
 .chk input{width:auto;min-height:0}
 body.busy #status::after{content:" ⏳"}
 details summary{cursor:pointer;color:var(--mut);font-size:13px}
+button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
+#menu{position:fixed;z-index:10;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.3);padding:6px;display:flex;flex-direction:column;gap:4px;max-width:92vw}
+#menu button{text-align:left;border:0;min-height:44px}
+#aktionen{gap:6px;padding:8px}#aktionen button{min-height:36px;padding:3px 9px;font-size:13px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -67,15 +74,24 @@ details summary{cursor:pointer;color:var(--mut);font-size:13px}
 
 <div class="card"><div id="status">Nicht verbunden.</div><div id="warn" hidden></div></div>
 
+<div class="card row" id="aktionen">
+  <button id="btnSave">Speichern</button>
+  <button id="btnLoad">Laden</button>
+  <button id="btnExport">Tabelle</button>
+  <button id="btnReeval">Neu auswerten</button>
+  <button id="btnReset">Zurücksetzen</button>
+  <button id="btnUndo">Rückgängig</button>
+  <button id="btnBox">Bereich markieren</button>
+  <button id="btnZoom">Ganze Messung</button>
+  <label class="chk"><input type="checkbox" id="zahlen"> Zahlen ausblenden</label>
+  <input type="file" id="file" accept=".csv,text/csv,text/plain" hidden>
+</div>
+
 <div class="tabs"><button id="tbCurves" class="on">Kurven</button><button id="tbReps">Wiederholungen</button></div>
 
 <div id="tab-curves" class="card">
   <canvas id="plot"></canvas>
   <div id="cursor"></div>
-  <div class="row" style="margin-top:6px">
-    <button id="btnZoom" class="mini">Ganze Messung</button>
-    <label class="chk"><input type="checkbox" id="zahlen"> Zahlen ausblenden</label>
-  </div>
 </div>
 
 <div id="tab-reps" class="card" hidden>
@@ -86,15 +102,8 @@ details summary{cursor:pointer;color:var(--mut);font-size:13px}
   <div class="bars"><canvas id="bar1"></canvas><canvas id="bar2"></canvas><canvas id="bar3"></canvas></div>
 </div>
 
-<div class="card row">
-  <button id="btnSave">Messung speichern</button>
-  <button id="btnLoad">Messung laden</button>
-  <button id="btnExport">Tabelle exportieren</button>
-  <button id="btnReeval">Neu auswerten</button>
-  <button id="btnReset">Zurücksetzen</button>
-  <input type="file" id="file" accept=".csv,text/csv,text/plain" hidden>
-</div>
 
+<div id="menu" hidden></div>
 <script type="text/plain" id="analyse-py">"""
 Auswertung der Beschleunigungsdaten (ohne GUI- oder Bluetooth-Abhängigkeiten).
 
@@ -613,7 +622,7 @@ def _R(x): return np.round(np.asarray(x, float), 5).tolist()
 def pack(r):
     return json.dumps(dict(t=_R(r.t), weg=_R(r.weg), hub=_R(r.hub), v=_R(r.v), a=_R(r.a), F=_R(r.F), P=_R(r.P),
         dt=float(r.dt), hz=int(r.hz), drift=float(r.drift), warn=list(r.warnungen),
-        reps=[asdict(p) for p in r.reps], scipy=bool(A.HAS_SCIPY), vmin=A.V_MIN_REP))
+        reps=[asdict(p) for p in r.reps], scipy=bool(A.HAS_SCIPY), vmin=A.V_MIN_REP, minf=A.MIN_FENSTER_SAMPLES))
 def run_eval(par, buf):
     global RES
     p = json.loads(par)
@@ -905,12 +914,12 @@ class Plot {
     this.mode = "empty"; this.t = []; this.ys = [[], [], [], [], []]; this.reps = [];
     this.xlim = [0, 1]; this.full = [0, 1]; this.gross = null; this.zahlenAus = false; this.cursor = null;
     this.ptrs = new Map(); this.lastTap = { t: 0, x: 0, y: 0 }; this.moved = false;
-    this.pending = false;
+    this.pending = false; this.dt = 0.01; this.drag = null; this.boxMode = false; this.box = null; this.longTimer = null; this.longFired = false; this.onEdit = () => {};
     canvas.style.touchAction = "none";
     canvas.addEventListener("pointerdown", e => this.down(e));
     canvas.addEventListener("pointermove", e => this.move(e));
     canvas.addEventListener("pointerup", e => this.up(e));
-    canvas.addEventListener("pointercancel", e => { this.ptrs.delete(e.pointerId); });
+    canvas.addEventListener("pointercancel", e => { this.ptrs.delete(e.pointerId); clearTimeout(this.longTimer); this.drag = null; this.box = null; this.draw(); });
     canvas.addEventListener("wheel", e => { e.preventDefault(); this.zoomAt(this.pxToT(e.offsetX), e.deltaY > 0 ? 1.25 : 0.8); }, { passive: false });
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
@@ -931,7 +940,7 @@ class Plot {
   setResult(res, keepView) {
     const behalten = keepView && this.mode === "result";
     const xl = this.xlim.slice();
-    this.mode = "result"; this.t = res.t; this.ys = KEYS.map(k => res[k]); this.reps = res.reps;
+    this.mode = "result"; this.dt = res.dt; this.minf = res.minf; this.drag = null; this.box = null; this.t = res.t; this.ys = KEYS.map(k => res[k]); this.reps = res.reps;
     this.full = [res.t[0], res.t[res.t.length - 1]];
     this.xlim = behalten ? xl : this.full.slice();
     if (!behalten) { this.cursor = null; this.gross = null; }
@@ -975,13 +984,14 @@ class Plot {
     }
     const t = this.t, i0 = Math.max(0, lowerBound(t, this.xlim[0]) - 1), i1 = Math.min(t.length, lowerBound(t, this.xlim[1]) + 1);
     this.hit = [];
+    const spans = this.drag ? this.drag.grenzen : this.reps.map(r => [r.s, r.e]);
     for (const p of pan) {
       const i = p.i, [ylo, yhi] = this.yRange(i, i0, i1), y2px = v => p.y1 - (v - ylo) / (yhi - ylo) * (p.y1 - p.y0);
       this.hit.push({ i, y0: p.y0, y1: p.y1, ylo, yhi });
       ctx.save(); ctx.beginPath(); ctx.rect(this.L, p.y0, xr - this.L, p.y1 - p.y0); ctx.clip();
       // Wiederholungsfenster
       ctx.fillStyle = span;
-      for (const r of this.reps) { const x0 = this.tToPx(t[r.s]), x1 = this.tToPx(t[Math.min(r.e, t.length) - 1]); ctx.fillRect(x0, p.y0, x1 - x0, p.y1 - p.y0); }
+      for (const [rs, re] of spans) { const x0 = this.tToPx(t[Math.min(rs, t.length - 1)]), x1 = this.tToPx(t[Math.min(re, t.length) - 1]); ctx.fillRect(x0, p.y0, x1 - x0, p.y1 - p.y0); }
       // Gitter
       const ty = ticks(ylo, yhi, Math.max(2, Math.round((p.y1 - p.y0) / 38)));
       ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.beginPath();
@@ -1036,6 +1046,10 @@ class Plot {
         ctx.textAlign = "right"; ctx.fillText("s", this.W - 2, p.y1 + 10);
       }
     }
+    if (this.box) {
+      const a = this.tToPx(Math.min(this.box.x0, this.box.x1)), b = this.tToPx(Math.max(this.box.x0, this.box.x1));
+      ctx.fillStyle = "rgba(44,160,44,0.25)"; ctx.fillRect(a, pan[0].y0, b - a, pan[pan.length - 1].y1 - pan[0].y0);
+    }
     // Cursor
     if (this.cursor !== null && this.mode === "result") {
       const x = this.tToPx(this.cursor);
@@ -1064,11 +1078,30 @@ class Plot {
     this.xlim = [Math.max(a, this.full[0]), Math.min(b, this.full[1])]; this.draw();
   }
   panelAt(y) { for (const h of this.hit || []) if (y >= h.y0 && y <= h.y1) return h.i; return null; }
+  clampT(t) { return Math.max(this.t[0], Math.min(this.t[this.t.length - 1], t)); }
+  tAt(i) { return this.t[Math.max(0, Math.min(i, this.t.length - 1))]; }
+  nearEdge(x) {
+    let best = null, bd = 1e9;
+    this.reps.forEach((r, i) => {
+      const w = Math.abs(this.tToPx(this.tAt(r.e)) - this.tToPx(this.tAt(r.s))), tol = Math.max(6, Math.min(14, 0.3 * w));   // schmale Fenster: Mitte bleibt frei
+      for (const [k, idx] of [["s", r.s], ["e", r.e]]) { const d = Math.abs(this.tToPx(this.tAt(idx)) - x); if (d < tol && d < bd) { bd = d; best = { i, kante: k }; } }
+    });
+    return best;
+  }
   down(e) {
     this.c.setPointerCapture(e.pointerId);
     this.ptrs.set(e.pointerId, { x: e.offsetX, y: e.offsetY, x0: e.offsetX, y0: e.offsetY });
-    this.moved = false; this.pinch = null;
-    if (this.ptrs.size === 2) { const [p, q] = [...this.ptrs.values()]; this.pinch = { d: Math.abs(p.x - q.x) || 1, a: this.xlim[0], b: this.xlim[1], tc: this.pxToT((p.x + q.x) / 2) }; this.moved = true; }
+    this.moved = false; this.pinch = null; this.longFired = false; clearTimeout(this.longTimer);
+    if (this.ptrs.size === 2) {
+      const [p, q] = [...this.ptrs.values()]; this.drag = null; this.box = null;
+      this.pinch = { d: Math.abs(p.x - q.x) || 1, a: this.xlim[0], b: this.xlim[1], tc: this.pxToT((p.x + q.x) / 2) }; this.moved = true; this.draw();
+    } else if (this.mode === "result" && this.ptrs.size === 1) {
+      if (this.boxMode) { const t = this.clampT(this.pxToT(e.offsetX)); this.box = { x0: t, x1: t, px0: e.offsetX }; return; }
+      const k = this.nearEdge(e.offsetX);
+      if (k) { this.drag = { ...k, grenzen: this.reps.map(r => [r.s, r.e]) }; this.onEdit("status", `Verschiebe ${k.kante === "s" ? "Start" : "Ende"} von Wiederholung ${this.reps[k.i].nr} ...`); return; }
+      const x = e.offsetX, y = e.offsetY;
+      this.longTimer = setTimeout(() => { if (!this.moved && this.ptrs.size === 1) { this.longFired = true; this.onEdit("long", { x, y, t: this.pxToT(x) }); } }, 550);
+    }
   }
   move(e) {
     const p = this.ptrs.get(e.pointerId); if (!p || this.mode !== "result") return;
@@ -1079,12 +1112,31 @@ class Plot {
       const mid = (a.x + b.x) / 2, rel = (mid - this.L) / (this.W - this.L - this.R);
       this.setX(this.pinch.tc - rel * span, this.pinch.tc - rel * span + span); return;
     }
-    if (Math.abs(e.offsetX - p.x0) > 6 || Math.abs(e.offsetY - p.y0) > 6) this.moved = true;
+    if (Math.abs(e.offsetX - p.x0) > 6 || Math.abs(e.offsetY - p.y0) > 6) { this.moved = true; clearTimeout(this.longTimer); }
+    if (this.box) { this.box.x1 = this.clampT(this.pxToT(e.offsetX)); this.draw(); return; }
+    if (this.drag) {
+      const n = this.t.length, idx = Math.max(0, Math.min(n - 1, Math.round(this.pxToT(e.offsetX) / this.dt)));
+      const { i, kante, grenzen } = this.drag, mind = this.minf || 5; let [s, en] = grenzen[i];
+      if (kante === "s") { const u = i > 0 ? grenzen[i - 1][1] : 0; s = Math.max(u, Math.min(idx, en - mind)); }
+      else { const o = i + 1 < grenzen.length ? grenzen[i + 1][0] : n; en = Math.min(o, Math.max(idx, s + mind)); }
+      grenzen[i] = [s, en]; this.draw(); return;
+    }
     if (this.moved && this.ptrs.size === 1) { const s = (this.xlim[1] - this.xlim[0]) / (this.W - this.L - this.R); this.setX(this.xlim[0] - dx * s, this.xlim[1] - dx * s); }
   }
   up(e) {
-    const p = this.ptrs.get(e.pointerId); this.ptrs.delete(e.pointerId);
-    if (!p || this.moved || this.mode !== "result") return;
+    const p = this.ptrs.get(e.pointerId); this.ptrs.delete(e.pointerId); clearTimeout(this.longTimer);
+    if (this.box) {
+      const b = this.box; this.box = null; this.draw();
+      if (Math.abs(e.offsetX - b.px0) >= 6) this.onEdit("box", { t0: Math.min(b.x0, b.x1), t1: Math.max(b.x0, b.x1), x: e.offsetX, y: e.offsetY });
+      return;
+    }
+    if (this.drag) {
+      const d = this.drag; this.drag = null; this.draw();
+      if (JSON.stringify(d.grenzen) !== JSON.stringify(this.reps.map(r => [r.s, r.e]))) this.onEdit("grenzen", { grenzen: d.grenzen });
+      else this.onEdit("status", "Zeitfenster unverändert.");
+      return;
+    }
+    if (!p || this.moved || this.longFired || this.mode !== "result") return;
     const now = performance.now(), dbl = now - this.lastTap.t < 350 && Math.hypot(e.offsetX - this.lastTap.x, e.offsetY - this.lastTap.y) < 25;
     this.lastTap = { t: dbl ? 0 : now, x: e.offsetX, y: e.offsetY };
     if (dbl) { const i = this.panelAt(e.offsetY); this.gross = (this.gross !== null) ? null : i; this.draw(); this.onChange(); return; }
@@ -1119,7 +1171,7 @@ const MODES = ["Aus (nur Z-Achse)", "Sensorwinkel", "Gyro-Filter (Drehungen)"];
 const LIVE_SECONDS = 10;
 const PYODIDE_BASE = new URLSearchParams(location.search).get("pyodide") || "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
 
-const S = { sensor: null, state: "idle", samples: [], samplesHz: null, res: null, manual: false, liveOn: false, job: null, wake: null };
+const S = { sensor: null, state: "idle", samples: [], samplesHz: null, res: null, manual: false, liveOn: false, job: null, wake: null, undo: [], box: false };
 let plot, worker, workerReady, msgId = 0;
 const pending = new Map();
 
@@ -1161,7 +1213,7 @@ async function auswerten(extra = "", fenster = null) {
   try {
     await workerReady;
     const out = await call("eval", { par: { ncols, masse: m, modus, grenz, hz: S.samplesHz, fenster }, buf });
-    S.manual = fenster !== null;
+    S.manual = fenster !== null; S.undo = [];
     zeigeErgebnis(JSON.parse(out));
     const r = S.res;
     const pmax = Math.max(...r.P);
@@ -1200,7 +1252,7 @@ function zeichneBalken() {
 }
 function cursorAnzeige() {
   const c = plot.cursorValues(), el = $("cursor");
-  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte anzeigen · Doppeltippen: Diagramm vergrößern" : ""; return; }
+  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte · Doppeltippen: vergrößern · Fensterkante ziehen · lang drücken: Fenster löschen/hinzufügen" : ""; return; }
   const idx = plot.gross !== null ? [plot.gross] : [0, 1, 2, 3, 4];
   el.textContent = `t = ${fmt4(c.t)} s   ` + idx.map(i => `${NAMES[i]} = ${fmt4(c.vals[i])} ${UNITS[i]}`).join("   ");
 }
@@ -1302,11 +1354,11 @@ async function neuAuswerten() {
 }
 function zuruecksetzen() {
   if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
-  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false;
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus();
   if (S.sensor) S.sensor.resetLive();
   plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); status("Zurückgesetzt");
 }
-function aktualisiereKnoepfe() { const has = !!S.res; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
+function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
 
 // ---------- Speichern / Laden / Export ----------
 function speichern() {
@@ -1347,6 +1399,73 @@ function exportTabelle() {
   download(`wiederholungen_${stamp()}.csv`, "﻿" + lines.join("\n") + "\n"); status("Tabelle als Datei gespeichert (Ordner „Downloads“).");
 }
 
+
+// ---------- Zeitfenster bearbeiten ----------
+async function uebernehmeGrenzen(grenzen) {
+  const res = S.res; if (!res) return;
+  S.undo.push({ grenzen: res.reps.map(r => [r.s, r.e]), manual: S.manual }); if (S.undo.length > 50) S.undo.shift();
+  try { const out = await call("setze", { grenzen }); S.manual = true; zeigeErgebnis(JSON.parse(out), true); }
+  catch (e) { S.undo.pop(); status("Fehler: " + e.message); }
+  aktualisiereKnoepfe();
+}
+async function rueckgaengig() {
+  if (!S.undo.length || !S.res) return;
+  const u = S.undo.pop();
+  try { const out = await call("setze", { grenzen: u.grenzen }); S.manual = u.manual; zeigeErgebnis(JSON.parse(out), true); const rest = S.undo.length; status("Änderung rückgängig gemacht" + (rest ? ` (${rest} weitere möglich).` : ".")); }
+  catch (e) { status("Fehler: " + e.message); }
+  aktualisiereKnoepfe();
+}
+function repLoeschen(i) { uebernehmeGrenzen(S.res.reps.filter((r, k) => k !== i).map(r => [r.s, r.e])); }
+function repHinzufuegen(idx) {
+  const res = S.res; let s = idx, e = Math.min(idx + Math.round(1.0 / res.dt), res.t.length);
+  for (const r of res.reps) if (r.s >= s) e = Math.min(e, r.s);
+  if (e - s < res.minf) { status("Hier ist zu wenig Platz für ein neues Fenster."); return; }
+  uebernehmeGrenzen(res.reps.map(r => [r.s, r.e]).concat([[s, e]]));
+}
+function zeigeMenu(x, y, items) {
+  const m = $("menu"), cr = $("plot").getBoundingClientRect(); m.innerHTML = "";
+  for (const [label, fn] of items) { const b = document.createElement("button"); b.textContent = label; b.onclick = () => { schliesseMenu(); fn && fn(); }; m.appendChild(b); }
+  m.hidden = false; const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, cr.left + x - w / 2)) + "px";
+  m.style.top = Math.max(6, Math.min(window.innerHeight - h - 6, cr.top + y - h - 12)) + "px";
+}
+function schliesseMenu() { $("menu").hidden = true; }
+function boxAus() { S.box = false; plot.boxMode = false; plot.box = null; $("btnBox").classList.remove("on"); $("plot").style.cursor = ""; plot.draw(); }
+function boxToggle() {
+  S.box = !S.box; plot.boxMode = S.box; $("btnBox").classList.toggle("on", S.box);
+  if (S.box) status("Bereich markieren: mit dem Finger ein Stück der Zeitachse markieren (Verschieben ist dabei ausgeschaltet).");
+  else boxAus();
+}
+async function boxAktion(art, t0, t1) {
+  const res = S.res; if (!res) return;
+  const n = res.t.length, i0 = Math.max(0, Math.round(t0 / res.dt)), i1 = Math.min(n, Math.round(t1 / res.dt));
+  let neu;
+  if (art === "erkennen") {
+    try { neu = JSON.parse(await call("bereich", { bereich: [t0, t1] })); } catch (e) { status("Fehler: " + e.message); return; }
+    if (!neu.length) { status("Im markierten Bereich wurde keine Wiederholung erkannt, auch nicht mit empfindlicher Schwelle. Mit „Bereich als eine Wiederholung hinzufügen“ geht es von Hand."); return; }
+  } else {
+    if (i1 - i0 < res.minf) { status("Der markierte Bereich ist zu klein."); return; }
+    neu = [[i0, i1]];
+  }
+  const behalten = res.reps.filter(r => !(neu.some(([s, e]) => r.s < e && s < r.e) || (art === "erkennen" && i0 <= (r.s + r.e) / 2 && (r.s + r.e) / 2 < i1))).map(r => [r.s, r.e]);
+  const ersetzt = res.reps.length - behalten.length;
+  await uebernehmeGrenzen(behalten.concat(neu));
+  boxAus();
+  status((art === "erkennen" ? `${neu.length} Wiederholung(en) im Bereich erkannt` : "Wiederholung hinzugefügt") + (ersetzt ? `, ${ersetzt} bestehende ersetzt` : "") + `. Jetzt ${S.res.reps.length} Wiederholungen. Rückgängig ist möglich.`);
+}
+function plotEdit(typ, d) {
+  if (typ === "status") status(d);
+  else if (typ === "grenzen") uebernehmeGrenzen(d.grenzen).then(() => status("Zeitfenster manuell angepasst."));
+  else if (typ === "long") {
+    const res = S.res; if (!res) return; const idx = Math.round(d.t / res.dt), k = res.reps.findIndex(r => r.s <= idx && idx < r.e);
+    if (navigator.vibrate) try { navigator.vibrate(20); } catch (e) { /* ignorieren */ }
+    if (k >= 0) zeigeMenu(d.x, d.y, [[`Wiederholung ${res.reps[k].nr} löschen`, () => repLoeschen(k)], ["Abbrechen"]]);
+    else zeigeMenu(d.x, d.y, [["Wiederholung hier hinzufügen (1 s)", () => repHinzufuegen(Math.max(0, idx))], ["Abbrechen"]]);
+  } else if (typ === "box") {
+    zeigeMenu(d.x, d.y, [["Wiederholungen im Bereich automatisch erkennen", () => boxAktion("erkennen", d.t0, d.t1)], ["Bereich als eine Wiederholung hinzufügen", () => boxAktion("hinzufuegen", d.t0, d.t1)], ["Abbrechen"]]);
+  }
+}
+
 // ---------- Oberfläche ----------
 function zeigeTab(name) {
   $("tab-curves").hidden = name !== "curves"; $("tab-reps").hidden = name !== "reps";
@@ -1354,7 +1473,10 @@ function zeigeTab(name) {
   if (name === "curves") plot.resize(); else zeichneBalken();
 }
 function init() {
-  lade(); plot = new Plot($("plot"), cursorAnzeige); plot.setEmpty(); cursorAnzeige();
+  lade(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
+  $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle;
+  document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
   $("btnConnect").onclick = verbinden; $("btnCal").onclick = kalibrieren; $("btnLive").onclick = toggleLive;
   $("btnStart").onclick = start; $("btnStop").onclick = stopManuell;
   $("btnSave").onclick = speichern; $("btnExport").onclick = exportTabelle; $("btnReeval").onclick = neuAuswerten; $("btnReset").onclick = zuruecksetzen;
