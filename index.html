@@ -83,6 +83,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
   <button id="btnLast" disabled>Letzte Messung</button>
   <button id="btnUndo">Rückgängig</button>
   <button id="btnEdge">Fenster verschieben</button>
+  <button id="btnDel">Wiederholung löschen</button>
   <button id="btnBox">Bereich markieren</button>
   <button id="btnZoom">Ganze Messung</button>
   <label class="chk"><input type="checkbox" id="zahlen"> Zahlen ausblenden</label>
@@ -99,7 +100,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 <div id="tab-reps" class="card" hidden>
   <div id="summary" style="margin-bottom:8px">Noch keine Messung.</div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v −%</th><th>F −%</th><th>P −%</th></tr></thead>
+    <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v −%</th><th>F −%</th><th>P −%</th><th></th></tr></thead>
     <tbody id="repBody"></tbody></table></div>
   <div class="bars"><canvas id="bar1"></canvas><canvas id="bar2"></canvas><canvas id="bar3"></canvas></div>
 </div>
@@ -146,9 +147,13 @@ VORLAUF_ANTEIL = 0.05   # Anteil der Spitzengeschwindigkeit, ab dem der Stoß be
 STEIGUNG_MIN = 0.05     # 1/s: Mindeststeigung von v am Stoßanfang, Anteil der Spitzengeschwindigkeit pro Sekunde
 LETZTE_MIN_ZYKLEN = 2  # so viele frühere Zyklen braucht die Schätzung für die letzte Wiederholung
 SENK_V = 0.3           # m/s: Geschwindigkeit, ab der ein Stoß bzw. Senken gezählt wird
+DRIFT_MIN = 0.05          # m, kleinste Nettoverschiebung je Zyklus, die als gleichmäßige Drift gilt
+DRIFT_KONSISTENT = 0.25   # Streuung der Zyklus-Nettoverschiebungen höchstens so groß (Anteil), sonst keine gleichmäßige Drift
 LETZTE_TOL = 0.5       # Anteil des Hubs: so weit darf die Nettoverschiebung des letzten Zyklus von den früheren abweichen
 RAND_TOL = 0.003      # m/s: Toleranz beim Verlängern der Fensterränder (Rauschen)
 MIN_FENSTER_SAMPLES = 5   # kleinste erlaubte Fensterbreite
+V_MIN_KAND = 0.10         # m/s, untere Schwelle der endgültigen Kandidatensuche (Fensterränder, langsame Wdh. mit Plateau)
+V_HOCH_KAND = 0.15        # m/s, so schnell muss v im Fenster mindestens einmal sein
 START_NACHBARN = 3        # Starthöhe wird mit so vielen Wdh. links/rechts verglichen (nicht mit der besten)
 V_MIN_BEREICH = (V_MIN_REP, 0.08, 0.04)   # immer empfindlichere Schwellen für den markierten Bereich
 
@@ -288,7 +293,8 @@ def tiefpass(daten, fs, grenzfreq):
     return np.convolve(np.pad(daten, (pad, pad), mode="edge"), np.ones(k) / k, mode="valid")
 
 
-def finde_wiederholungen(v, dt, v_min=V_MIN_REP):
+def finde_wiederholungen(v, dt, v_min=V_MIN_REP, v_hoch=None):
+    """Fenster, in denen v über v_min liegt und mindestens einmal v_hoch erreicht (Standard: v_hoch = v_min)."""
     n = len(v)
     aktiv = v > v_min
     segs, start = [], None
@@ -301,6 +307,8 @@ def finde_wiederholungen(v, dt, v_min=V_MIN_REP):
     if start is not None:
         segs.append([start, n])
 
+    if v_hoch is not None and v_hoch > v_min:
+        segs = [sg for sg in segs if np.max(v[sg[0]:sg[1]]) > v_hoch]
     merged = []
     for s in segs:
         if merged and (s[0] - merged[-1][1]) * dt < MERGE_LUECKE:
@@ -354,9 +362,9 @@ def langsamer_versatz(v, dt):
     return np.sign(b) * np.maximum(np.abs(b) - BASIS_TOTZONE, 0.0)
 
 
-def erkenne(v, dt, v_min=V_MIN_REP):
+def erkenne(v, dt, v_min=V_MIN_REP, v_hoch=None):
     """Wiederholungen suchen, nachdem ein großer langsamer Versatz von v abgezogen wurde."""
-    return finde_wiederholungen(v - langsamer_versatz(v, dt), dt, v_min)
+    return finde_wiederholungen(v - langsamer_versatz(v, dt), dt, v_min, v_hoch)
 
 
 def verwerfe_stoerungen(v, segs, dt):
@@ -381,10 +389,21 @@ def verwerfe_stoerungen(v, segs, dt):
     # mit den Nachbar-Wiederholungen verglichen, nicht mit der besten des ganzen Satzes.
     n = len(segs)
     start_ok = np.ones(n, dtype=bool)
+    ts = np.array([s for s, _ in segs], dtype=float)
+    # Bei Drift verschiebt sich die Starthöhe von Wiederholung zu Wiederholung gleichmäßig (z. B. 0,25 m je Wdh.).
+    # Deshalb wird sie zwischen dem nächsten gültigen Nachbarn davor und danach linear interpoliert, nicht
+    # mit dem Median verglichen. Gibt es nur auf einer Seite Nachbarn, zählt deren Median.
     for k in range(n):
-        nachbarn = [j for j in range(max(0, k - START_NACHBARN), min(n, k + START_NACHBARN + 1))
-                    if j != k and hub_ok[j]]
-        if nachbarn:
+        links = [j for j in range(k - 1, -1, -1) if hub_ok[j]][:START_NACHBARN]      # die nächsten gültigen Nachbarn,
+        rechts = [j for j in range(k + 1, n) if hub_ok[j]][:START_NACHBARN]          # winzige Kandidaten dazwischen zählen nicht
+        if links and rechts and (ts[rechts[0]] - ts[links[0]]) * dt <= 2 * MAX_ZYKLUS_S:
+            a, b = links[0], rechts[0]
+            erwartet = starts[a] + (starts[b] - starts[a]) * (ts[k] - ts[a]) / (ts[b] - ts[a])
+            abw = abs(starts[k] - erwartet)
+            abw = min(abw, abs(starts[k] - np.median(starts[links + rechts])))   # wie bisher, falls das besser passt
+            start_ok[k] = abw <= grenze
+        elif links or rechts:
+            nachbarn = links + rechts
             start_ok[k] = abs(starts[k] - np.median(starts[nachbarn])) <= grenze
     # Bei gekipptem Sensor driftet die Starthöhe um Meter. Kandidaten mit vollem Hub sind trotzdem echte
     # Wiederholungen; die Starthöhe prüft nur kleinere Kandidaten (typische Störungen).
@@ -451,9 +470,19 @@ def zyklen_schliessen(v, starts, dt, ende=None):
         i_vor = float(np.median(netto))
         if j is not None and e < len(v) and e > s + 10:
             hub = float(w[s:s + j + 1].max() - w[s])
-            if hub > 0 and abs(float(w[s + j] - w[s]) - i_vor) < LETZTE_TOL * hub:
-                tau = np.arange(e - s + 1) * dt
-                v[s:e + 1] -= (i_vor * 6 / T ** 3) * tau * (T - tau)
+            net = float(w[s + j] - w[s])
+            if hub > 0 and abs(net - i_vor) < LETZTE_TOL * hub:
+                if abs(i_vor) >= DRIFT_MIN and float(np.std(netto)) <= DRIFT_KONSISTENT * abs(i_vor):
+                    # Die früheren Zyklen driften gleichmäßig (Sensorneigung): die letzte driftet genauso.
+                    tau = np.arange(e - s + 1) * dt
+                    v[s:e + 1] -= (i_vor * 6 / T ** 3) * tau * (T - tau)
+                else:
+                    # Keine gleichmäßige Drift in den früheren Zyklen: die Stange kam nach dem Senken zurück auf die
+                    # Startposition, der Rest ist ein Messfehler dieser Wiederholung und wird wie bei den anderen abgezogen.
+                    Tj = j * dt
+                    tau = np.arange(j + 1) * dt
+                    p = tau * (Tj - tau)
+                    v[s:s + j + 1] -= _trapez(v[s:s + j + 1], dt) / _trapez(p, dt) * p
     return v
 
 
@@ -597,7 +626,7 @@ def auswerten(samples, masse, modus, grenzfreq=20.0, hz=None, fenster=None):
         kand = erkenne(v, dt, v_min)
         anker = sorted(set([i0] + [min(max(s - 1, i0), i1) for s, _ in kand] + [i1]))
         v = v_aus_ankern(anker)
-    segs = verwerfe_stoerungen(v, erkenne(v, dt), dt)
+    segs = verwerfe_stoerungen(v, erkenne(v, dt, V_MIN_KAND, V_HOCH_KAND), dt)
 
     if fenster is not None:
         grenzen = [(int(round(t0 / dt)), int(round(t1 / dt))) for t0, t1 in fenster]
@@ -916,8 +945,9 @@ class Plot {
     this.mode = "empty"; this.t = []; this.ys = [[], [], [], [], []]; this.reps = [];
     this.xlim = [0, 1]; this.full = [0, 1]; this.gross = null; this.zahlenAus = false; this.cursor = null;
     this.ptrs = new Map(); this.lastTap = { t: 0, x: 0, y: 0 }; this.moved = false;
-    this.pending = false; this.dt = 0.01; this.drag = null; this.boxMode = false; this.editEdges = false; this.box = null; this.longTimer = null; this.longFired = false; this.onEdit = () => {};
-    canvas.style.touchAction = "none";
+    this.pending = false; this.dt = 0.01; this.drag = null; this.boxMode = false; this.editEdges = false; this.deleteMode = false; this.box = null; this.longTimer = null; this.longFired = false; this.onEdit = () => {};
+    canvas.style.touchAction = "none"; canvas.style.userSelect = "none"; canvas.style.webkitUserSelect = "none"; canvas.style.webkitTouchCallout = "none";
+    canvas.addEventListener("contextmenu", e => e.preventDefault());
     canvas.addEventListener("pointerdown", e => this.down(e));
     canvas.addEventListener("pointermove", e => this.move(e));
     canvas.addEventListener("pointerup", e => this.up(e));
@@ -1102,7 +1132,7 @@ class Plot {
       const k = this.editEdges ? this.nearEdge(e.offsetX) : null;
       if (k) { this.drag = { ...k, grenzen: this.reps.map(r => [r.s, r.e]) }; this.onEdit("status", `Verschiebe ${k.kante === "s" ? "Start" : "Ende"} von Wiederholung ${this.reps[k.i].nr} ...`); return; }
       const x = e.offsetX, y = e.offsetY;
-      this.longTimer = setTimeout(() => { if (!this.moved && this.ptrs.size === 1) { this.longFired = true; this.onEdit("long", { x, y, t: this.pxToT(x) }); } }, 550);
+      this.longTimer = setTimeout(() => { if (!this.moved && this.ptrs.size === 1) { this.longFired = true; this.onEdit("long", { x, y, t: this.pxToT(x) }); } }, 450);
     }
   }
   move(e) {
@@ -1139,6 +1169,7 @@ class Plot {
       return;
     }
     if (!p || this.moved || this.longFired || this.mode !== "result") return;
+    if (this.deleteMode) { this.onEdit("delete", { t: this.pxToT(e.offsetX), x: e.offsetX, y: e.offsetY }); return; }
     const now = performance.now(), dbl = now - this.lastTap.t < 350 && Math.hypot(e.offsetX - this.lastTap.x, e.offsetY - this.lastTap.y) < 25;
     this.lastTap = { t: dbl ? 0 : now, x: e.offsetX, y: e.offsetY };
     if (dbl) { const i = this.panelAt(e.offsetY); this.gross = (this.gross !== null) ? null : i; this.draw(); this.onChange(); return; }
@@ -1236,9 +1267,11 @@ function fuelleReps(reps) {
   const tb = $("repBody"); tb.innerHTML = "";
   for (const r of reps) {
     const tr = document.createElement("tr");
+    const tdx = document.createElement("td"); const bx = document.createElement("button"); bx.textContent = "✕"; bx.className = "mini"; bx.title = "Wiederholung löschen"; bx.setAttribute("aria-label", `Wiederholung ${r.nr} löschen`);
+    const idx = reps.indexOf(r); bx.onclick = () => { repLoeschen(idx).then(() => status(`Wiederholung ${r.nr} gelöscht. Rückgängig ist über den Reiter „Kurven“ möglich.`)); }; tdx.appendChild(bx);
     [r.nr, r.t_start.toFixed(2), r.dauer.toFixed(2), r.hub.toFixed(2), r.a_max.toFixed(1), r.v_max.toFixed(2), r.v_mean.toFixed(2), r.F_max.toFixed(0), r.F_mean.toFixed(0), r.P_max.toFixed(0), r.P_mean.toFixed(0), r.dv.toFixed(1), r.dF.toFixed(1), r.dP.toFixed(1)]
       .forEach(v => { const td = document.createElement("td"); td.textContent = String(v).replace(".", ","); tr.appendChild(td); });
-    tb.appendChild(tr);
+    tr.appendChild(tdx); tb.appendChild(tr);
   }
   const sm = $("summary");
   if (!reps.length) sm.textContent = `Keine Wiederholung erkannt (Aufwärtsgeschwindigkeit < ${(S.res.vmin).toString().replace(".", ",")} m/s).`;
@@ -1255,7 +1288,7 @@ function zeichneBalken() {
 }
 function cursorAnzeige() {
   const c = plot.cursorValues(), el = $("cursor");
-  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte · Doppeltippen: vergrößern · lang drücken: Fenster löschen/hinzufügen · Kanten ziehen: Knopf „Fenster verschieben“" : ""; return; }
+  if (!c) { el.textContent = plot.mode === "result" ? "Tippen: Werte · Doppeltippen: vergrößern · Knöpfe oben: Fenster verschieben, Löschen, Bereich markieren · lang drücken: Fenster löschen/hinzufügen" : ""; return; }
   const idx = plot.gross !== null ? [plot.gross] : [0, 1, 2, 3, 4];
   el.textContent = `t = ${fmt4(c.t)} s   ` + idx.map(i => `${NAMES[i]} = ${fmt4(c.vals[i])} ${UNITS[i]}`).join("   ");
 }
@@ -1357,11 +1390,11 @@ async function neuAuswerten() {
 }
 function zuruecksetzen() {
   if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
-  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus();
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus(); loeschAus();
   if (S.sensor) S.sensor.resetLive();
   plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); loescheLetzte(); status("Zurückgesetzt");
 }
-function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; $("btnEdge").disabled = !has; for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
+function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; $("btnEdge").disabled = !has; $("btnDel").disabled = !(has && S.res.reps.length); for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
 
 // ---------- Speichern / Laden / Export ----------
 function speichern() {
@@ -1418,7 +1451,7 @@ async function rueckgaengig() {
   catch (e) { status("Fehler: " + e.message); }
   aktualisiereKnoepfe();
 }
-function repLoeschen(i) { uebernehmeGrenzen(S.res.reps.filter((r, k) => k !== i).map(r => [r.s, r.e])); }
+function repLoeschen(i) { return uebernehmeGrenzen(S.res.reps.filter((r, k) => k !== i).map(r => [r.s, r.e])); }
 function repHinzufuegen(idx) {
   const res = S.res; let s = idx, e = Math.min(idx + Math.round(1.0 / res.dt), res.t.length);
   for (const r of res.reps) if (r.s >= s) e = Math.min(e, r.s);
@@ -1433,14 +1466,19 @@ function zeigeMenu(x, y, items) {
   m.style.top = Math.max(6, Math.min(window.innerHeight - h - 6, cr.top + y - h - 12)) + "px";
 }
 function schliesseMenu() { $("menu").hidden = true; }
+function loeschAus() { plot.deleteMode = false; $("btnDel").classList.remove("on"); }
+function loeschToggle() {
+  const an = !plot.deleteMode; if (an) { boxAus(); kanteAus(); } plot.deleteMode = an; $("btnDel").classList.toggle("on", an);
+  status(an ? "Löschen: auf das orange Fenster der falschen Wiederholung tippen. „Rückgängig“ holt sie zurück." : "Löschen ist aus.");
+}
 function kanteAus() { plot.editEdges = false; $("btnEdge").classList.remove("on"); }
 function kanteToggle() {
-  const an = !plot.editEdges; if (an) boxAus(); plot.editEdges = an; $("btnEdge").classList.toggle("on", an);
+  const an = !plot.editEdges; if (an) { boxAus(); loeschAus(); } plot.editEdges = an; $("btnEdge").classList.toggle("on", an);
   status(an ? "Fenster verschieben: Kante eines orangen Fensters ziehen. Zum Beenden den Knopf noch einmal tippen." : "Fenster verschieben ist aus.");
 }
 function boxAus() { S.box = false; plot.boxMode = false; plot.box = null; $("btnBox").classList.remove("on"); $("plot").style.cursor = ""; plot.draw(); }
 function boxToggle() {
-  S.box = !S.box; if (S.box) kanteAus(); plot.boxMode = S.box; $("btnBox").classList.toggle("on", S.box);
+  S.box = !S.box; if (S.box) { kanteAus(); loeschAus(); } plot.boxMode = S.box; $("btnBox").classList.toggle("on", S.box);
   if (S.box) status("Bereich markieren: mit dem Finger ein Stück der Zeitachse markieren (Verschieben ist dabei ausgeschaltet).");
   else boxAus();
 }
@@ -1463,6 +1501,11 @@ async function boxAktion(art, t0, t1) {
 }
 function plotEdit(typ, d) {
   if (typ === "status") status(d);
+  else if (typ === "delete") {
+    const res = S.res; if (!res) return; const idx = Math.round(d.t / res.dt), k = res.reps.findIndex(r => r.s <= idx && idx < r.e);
+    if (k < 0) { status("Dort ist kein Fenster. Auf ein oranges Fenster tippen."); return; }
+    const nr = res.reps[k].nr; loeschAus(); repLoeschen(k).then(() => status(`Wiederholung ${nr} gelöscht. Jetzt ${S.res.reps.length} Wiederholungen. Rückgängig ist möglich.`));
+  }
   else if (typ === "grenzen") uebernehmeGrenzen(d.grenzen).then(() => status("Zeitfenster manuell angepasst."));
   else if (typ === "long") {
     const res = S.res; if (!res) return; const idx = Math.round(d.t / res.dt), k = res.reps.findIndex(r => r.s <= idx && idx < r.e);
@@ -1505,7 +1548,7 @@ function zeigeTab(name) {
 }
 function init() {
   lade(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
-  $("btnLast").onclick = () => stelleWiederHer(false); $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle;
+  $("btnLast").onclick = () => stelleWiederHer(false); $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle; $("btnDel").onclick = loeschToggle;
   document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
   $("btnConnect").onclick = verbinden; $("btnCal").onclick = kalibrieren; $("btnLive").onclick = toggleLive;
