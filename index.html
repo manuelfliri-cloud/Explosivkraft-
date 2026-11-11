@@ -144,6 +144,8 @@ VOLLER_HUB_ANTEIL = 0.8  # Kandidaten mit mindestens diesem Hub-Anteil entfallen
 MAX_ZYKLUS_S = 6.0     # s: Zyklen (Start bis nächster Start) bis zu dieser Länge werden geschlossen
 VORLAUF_MAX_S = 1.0     # s: längerer Vorlauf vor der Spitze gilt nicht mehr als Teil des Stoßes
 VORLAUF_ANTEIL = 0.05   # Anteil der Spitzengeschwindigkeit, ab dem der Stoß beginnt
+PLATEAU_ANTEIL = 0.20   # Anteil der Spitzengeschwindigkeit: darunter gilt v vor dem Stoß als flaches Plateau
+PLATEAU_MIN_S = 0.30    # s: so lange muss das Plateau mindestens dauern, damit es vom Fenster abgeschnitten wird
 STEIGUNG_MIN = 0.05     # 1/s: Mindeststeigung von v am Stoßanfang, Anteil der Spitzengeschwindigkeit pro Sekunde
 LETZTE_MIN_ZYKLEN = 2  # so viele frühere Zyklen braucht die Schätzung für die letzte Wiederholung
 SENK_V = 0.3           # m/s: Geschwindigkeit, ab der ein Stoß bzw. Senken gezählt wird
@@ -323,6 +325,11 @@ def finde_wiederholungen(v, dt, v_min=V_MIN_REP, v_hoch=None):
         # Langer, schwacher Vorlauf (Rest-Drift nach einem kleinen Stoß, Gehen, Hängen): die Wiederholung beginnt
         # erst dort, wo der eigentliche Stoß anfängt. Dort ist v wirklich ~0 und der richtige Ankerpunkt.
         pk = s + int(np.argmax(v[s:e]))
+        # Langsames Plateau vor dem eigentlichen Stoß (v lange nur ~20 % der Spitze, z. B. Versatz nach dem Absetzen):
+        # Das Fenster beginnt erst dort, wo die Geschwindigkeit wirklich ansteigt.
+        flach = np.nonzero(v[s:pk] < PLATEAU_ANTEIL * v[pk])[0]
+        if len(flach) and flach[-1] * dt > PLATEAU_MIN_S:
+            s = s + int(flach[-1])
         if (pk - s) * dt > VORLAUF_MAX_S:
             tief = np.nonzero(v[s:pk] < max(V_RAND, VORLAUF_ANTEIL * v[pk]))[0]
             s = s + int(tief[-1]) if len(tief) else pk - int(0.3 / dt)
