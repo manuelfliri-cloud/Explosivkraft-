@@ -50,7 +50,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-d (Balken wählbar)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-e (Hub oben)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -1309,13 +1309,13 @@ function fuelleReps(reps) {
 }
 // Auswählbare Balkendiagramme (Reihenfolge fest, damit z. B. v Ø direkt unter v max steht)
 const BAR_DEFS = [
-  { key: "v_max", title: "Spitzengeschwindigkeit (m/s)", dec: 2 }, { key: "v_mean", title: "Mittlere Geschwindigkeit (m/s)", dec: 2 },
+  { key: "hub", title: "Hub (m)", dec: 2 }, { key: "v_max", title: "Spitzengeschwindigkeit (m/s)", dec: 2 }, { key: "v_mean", title: "Mittlere Geschwindigkeit (m/s)", dec: 2 },
   { key: "F_max", title: "Spitzenkraft (N)", dec: 0 }, { key: "F_mean", title: "Mittlere Kraft (N)", dec: 0 },
   { key: "P_max", title: "Spitzenleistung (W)", dec: 0 }, { key: "P_mean", title: "Mittlere Leistung (W)", dec: 0 },
-  { key: "a_max", title: "Spitzenbeschleunigung (m/s²)", dec: 1 }, { key: "hub", title: "Hub (m)", dec: 2 }, { key: "dauer", title: "Dauer (s)", dec: 2 }];
-const BAR_STANDARD = ["v_max", "v_mean", "F_max", "P_max"];
+  { key: "a_max", title: "Spitzenbeschleunigung (m/s²)", dec: 1 }, { key: "dauer", title: "Dauer (s)", dec: 2 }];
+const BAR_STANDARD = ["hub", "v_max", "v_mean", "F_max", "P_max"];
 function ladeBalkenWahl() {
-  try { const a = JSON.parse(localStorage.getItem("ek-bars") || "null"); if (Array.isArray(a)) return BAR_DEFS.map(d => d.key).filter(k => a.includes(k)); } catch (e) { /* ignorieren */ }
+  try { const a = JSON.parse(localStorage.getItem("ek-bars2") || "null"); if (Array.isArray(a)) return BAR_DEFS.map(d => d.key).filter(k => a.includes(k)); } catch (e) { /* ignorieren */ }
   return BAR_STANDARD.slice();
 }
 S.bars = ladeBalkenWahl();
@@ -1323,7 +1323,7 @@ function baueBalkenWahl() {
   const box = $("barChecks"); box.innerHTML = "";
   for (const d of BAR_DEFS) {
     const lb = document.createElement("label"), cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = S.bars.includes(d.key);
-    cb.onchange = () => { S.bars = BAR_DEFS.map(x => x.key).filter(k => k === d.key ? cb.checked : S.bars.includes(k)); try { localStorage.setItem("ek-bars", JSON.stringify(S.bars)); } catch (e) { /* ignorieren */ } zeichneBalken(); };
+    cb.onchange = () => { S.bars = BAR_DEFS.map(x => x.key).filter(k => k === d.key ? cb.checked : S.bars.includes(k)); try { localStorage.setItem("ek-bars2", JSON.stringify(S.bars)); } catch (e) { /* ignorieren */ } zeichneBalken(); };
     lb.appendChild(cb); lb.appendChild(document.createTextNode(d.title.replace(/ \(.*\)$/, ""))); box.appendChild(lb);
   }
 }
