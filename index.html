@@ -49,7 +49,8 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-11-c (Name)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-c (Dauer im Diagramm)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
   <div class="row">
@@ -151,6 +152,7 @@ LETZTE_MIN_ZYKLEN = 2  # so viele frühere Zyklen braucht die Schätzung für di
 SENK_V = 0.3           # m/s: Geschwindigkeit, ab der ein Stoß bzw. Senken gezählt wird
 DRIFT_MIN = 0.05          # m, kleinste Nettoverschiebung je Zyklus, die als gleichmäßige Drift gilt
 DRIFT_KONSISTENT = 0.25   # Streuung der Zyklus-Nettoverschiebungen höchstens so groß (Anteil), sonst keine gleichmäßige Drift
+SENK_ANTEIL = 0.25     # Anteil des Hubs, den die Stange nach dem Stoß mindestens absinken muss, damit es als Senken zählt
 LETZTE_TOL = 0.5       # Anteil des Hubs: so weit darf die Nettoverschiebung des letzten Zyklus von den früheren abweichen
 RAND_TOL = 0.003      # m/s: Toleranz beim Verlängern der Fensterränder (Rauschen)
 MIN_FENSTER_SAMPLES = 5   # kleinste erlaubte Fensterbreite
@@ -478,7 +480,11 @@ def zyklen_schliessen(v, starts, dt, ende=None):
         if j is not None and e < len(v) and e > s + 10:
             hub = float(w[s:s + j + 1].max() - w[s])
             net = float(w[s + j] - w[s])
-            if hub > 0 and abs(net - i_vor) < LETZTE_TOL * hub:
+            # Gesenkt wurde nur, wenn die Stange nach dem höchsten Punkt auch wirklich ein Stück nach unten kam;
+            # ein kurzes Nachschwingen nach dem Stoß zählt nicht (sonst wird der Stoß selbst weggerechnet).
+            wk = integrieren(v, dt)                 # v ist inzwischen durch die früheren Zyklen korrigiert
+            senk = float(wk[s:s + j + 1].max() - wk[s + j])
+            if hub > 0 and senk >= SENK_ANTEIL * hub and abs(net - i_vor) < LETZTE_TOL * hub:
                 if abs(i_vor) >= DRIFT_MIN and float(np.std(netto)) <= DRIFT_KONSISTENT * abs(i_vor):
                     # Die früheren Zyklen driften gleichmäßig (Sensorneigung): die letzte driftet genauso.
                     tau = np.arange(e - s + 1) * dt
@@ -1054,6 +1060,19 @@ class Plot {
       }
       ctx.stroke();
       ctx.restore();
+      // Dauer jeder Wiederholung (im untersten Diagramm, mittig im Fenster)
+      if (p === pan[pan.length - 1] && this.mode === "result" && !this.zahlenAus && this.dt) {
+        ctx.fillStyle = fg; ctx.textAlign = "center"; ctx.font = "bold 11px system-ui, sans-serif";
+        let rechts = -1e9;
+        for (const [rs, re] of spans) {
+          const x0 = this.tToPx(t[Math.min(rs, t.length - 1)]), x1 = this.tToPx(t[Math.min(re, t.length) - 1]), xm = (x0 + x1) / 2;
+          const txt = ((re - rs) * this.dt).toFixed(2).replace(".", ",") + " s", w = ctx.measureText(txt).width;
+          if (xm - w / 2 < this.L + 2 || xm + w / 2 > xr - 2 || xm - w / 2 < rechts + 4) continue;
+          ctx.globalAlpha = 0.85; ctx.fillStyle = bg; ctx.fillRect(xm - w / 2 - 2, p.y1 - 16, w + 4, 14); ctx.globalAlpha = 1; ctx.fillStyle = fg;
+          ctx.fillText(txt, xm, p.y1 - 9); rechts = xm + w / 2;
+        }
+        ctx.font = "11px system-ui, sans-serif";
+      }
       // Spitzen: Dreieck + Zahl
       if (this.reps.length || this.mode === "result") {
         const peaks = [];
@@ -1382,7 +1401,7 @@ function stopManuell() {
 function stop() {
   if (S.state !== "recording") return;
   S.job = null; S.sensor.recording = false; S.state = "idle"; setSperre(false); setVerbunden(S.sensor.connected);
-  S.samples = S.sensor.rec.slice(); S.samplesHz = S.sensor.hz;
+  S.samples = S.sensor.rec.slice(); S.samplesHz = S.sensor.hz; setDatei("");
   if (S.samples.length < 50) { status("Zu wenige Daten empfangen."); return; }
   const dauerS = S.samples[S.samples.length - 1][0] - S.samples[0][0], hz = S.samples.length / dauerS;
   auswerten(` (${dauerS.toFixed(1)} s aufgenommen, ~${hz.toFixed(0)} Hz)`);
@@ -1397,13 +1416,14 @@ async function neuAuswerten() {
 }
 function zuruecksetzen() {
   if (S.state !== "idle") { status("Erst die laufende Messung stoppen."); return; }
-  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus(); loeschAus();
+  S.liveOn = false; $("btnLive").textContent = "Live-Daten"; S.samples = []; S.samplesHz = null; setDatei(""); S.res = null; S.manual = false; S.undo = []; boxAus(); kanteAus(); loeschAus();
   if (S.sensor) S.sensor.resetLive();
   plot.setEmpty(); $("repBody").innerHTML = ""; $("summary").textContent = "Noch keine Messung."; warn(""); cursorAnzeige(); aktualisiereKnoepfe(); zeichneBalken(); loescheLetzte(); status("Zurückgesetzt");
 }
 function aktualisiereKnoepfe() { const has = !!S.res; $("btnUndo").disabled = !(has && S.undo.length); $("btnBox").disabled = !has; $("btnEdge").disabled = !has; $("btnDel").disabled = !(has && S.res.reps.length); for (const id of ["btnSave", "btnReeval", "btnExport", "btnZoom"]) $(id).disabled = !has; $("btnExport").disabled = !(has && S.res.reps.length); }
 
 // ---------- Speichern / Laden / Export ----------
+function setDatei(n) { S.datei = n || ""; const e = $("datei"); e.textContent = S.datei ? "Datei: " + S.datei : ""; e.hidden = !S.datei; }
 function speichern() {
   if (!S.samples.length) return;
   const res = S.res; let h = `# masse=${masse() ?? ""}\n# korrektur=${MODES.indexOf($("korr").value)}\n# filter=${$("filter").value}\n`;
@@ -1413,7 +1433,7 @@ function speichern() {
   }
   const head = ["t", "ax_g", "ay_g", "az_g", "az_welt_g", "gx_dps", "gy_dps", "gz_dps"].slice(0, S.samples[0].length).join(",");
   const rows = S.samples.map(r => r.map((x, i) => i === 0 ? x.toFixed(6) : x.toFixed(5)).join(","));
-  download(`messung_${stamp()}.csv`, h + head + "\n" + rows.join("\n") + "\n");
+  const fn = `messung_${stamp()}.csv`; download(fn, h + head + "\n" + rows.join("\n") + "\n"); setDatei(fn);
   status("Messung als Datei gespeichert (Ordner „Downloads“).");
 }
 async function laden(file) {
@@ -1425,7 +1445,7 @@ async function laden(file) {
     }
     const data = rows.slice(1).map(l => l.split(",").map(Number));
     if (data.length < 50 || data.some(r => r.some(x => !isFinite(x)))) throw new Error("Datei enthält zu wenige oder ungültige Messpunkte.");
-    S.res = null; S.samples = data; S.samplesHz = /^\d+$/.test(meta.hz || "") ? parseInt(meta.hz, 10) : null;
+    S.res = null; S.samples = data; setDatei(file.name); S.samplesHz = /^\d+$/.test(meta.hz || "") ? parseInt(meta.hz, 10) : null;
     if (meta.masse) $("masse").value = meta.masse;
     if (meta.korrektur !== undefined && MODES[+meta.korrektur]) $("korr").value = MODES[+meta.korrektur];
     if (["Aus", "10", "20", "30", "50"].includes(meta.filter)) $("filter").value = meta.filter;
@@ -1530,7 +1550,7 @@ function idb() { return new Promise((res, rej) => { const r = indexedDB.open("ek
 async function sichere() {
   try {
     if (!S.samples.length) return; const db = await idb(), res = S.res;
-    const rec = { t: Date.now(), samples: S.samples, hz: S.samplesHz, masse: $("masse").value, korr: $("korr").value, filter: $("filter").value,
+    const rec = { t: Date.now(), samples: S.samples, hz: S.samplesHz, masse: $("masse").value, korr: $("korr").value, filter: $("filter").value, datei: S.datei || "",
       fenster: res && S.manual ? res.reps.map(r => [r.s * res.dt, r.e * res.dt]) : null };
     db.transaction("m", "readwrite").objectStore("m").put(rec, "letzte");
   } catch (e) { /* ignorieren */ }
@@ -1539,7 +1559,7 @@ async function holeLetzte() { try { const db = await idb(); return await new Pro
 async function loescheLetzte() { try { const db = await idb(); db.transaction("m", "readwrite").objectStore("m").delete("letzte"); } catch (e) { /* ignorieren */ } $("btnLast").disabled = true; }
 async function stelleWiederHer(auto) {
   const r = await holeLetzte(); if (!r) { status("Keine gesicherte Messung vorhanden."); return; }
-  S.samples = r.samples; S.samplesHz = r.hz; $("masse").value = r.masse; $("korr").value = r.korr; $("filter").value = r.filter;
+  S.samples = r.samples; S.samplesHz = r.hz; setDatei(r.datei || ""); $("masse").value = r.masse; $("korr").value = r.korr; $("filter").value = r.filter;
   zeigeTab("curves"); await auswerten(auto ? " - letzte Messung automatisch wiederhergestellt" : " - letzte Messung geladen", r.fenster);
 }
 async function startWiederherstellung() {
