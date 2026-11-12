@@ -36,6 +36,7 @@ button:disabled{opacity:.45;cursor:default}
 .tablewrap{overflow-x:auto}
 table{border-collapse:collapse;font-size:13px;width:100%;font-variant-numeric:tabular-nums}
 th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap} th{font-size:11px;color:var(--mut)}
+.checks{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin:8px 0 2px}.checks label{display:flex;flex-direction:row;align-items:center;margin:0;gap:6px;font-size:14px}.checks input{width:18px;height:18px}
 .bars canvas{width:100%;height:170px;display:block;margin-top:8px;border:1px solid var(--line);border-radius:8px}
 .chk{flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--fg)}
 .chk input{width:auto;min-height:0}
@@ -49,7 +50,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-c (Dauer im Diagramm)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-d (Balken wählbar)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -103,7 +104,8 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
   <div class="tablewrap"><table>
     <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v −%</th><th>F −%</th><th>P −%</th><th></th></tr></thead>
     <tbody id="repBody"></tbody></table></div>
-  <div class="bars"><canvas id="bar1"></canvas><canvas id="bar2"></canvas><canvas id="bar3"></canvas></div>
+  <details id="barSel" style="margin-top:8px"><summary>Diagramme wählen</summary><div id="barChecks" class="checks"></div></details>
+  <div class="bars" id="bars"></div>
 </div>
 
 
@@ -1216,7 +1218,7 @@ function drawBars(canvas, reps, key, title, dec) {
   ctx.font = `${n > 20 ? 8 : 10}px system-ui, sans-serif`; ctx.textAlign = "center";
   reps.forEach((p, k) => {
     const h = mx > 0 ? p[key] / mx * H : 0, x = 8 + k * bw;
-    ctx.fillStyle = p[key] === mx ? (css("--plot-good") || "#2ca02c") : (css("--plot-line") || "#1f77b4");
+    ctx.fillStyle = (p[key] === mx && key !== "dauer") ? (css("--plot-good") || "#2ca02c") : (css("--plot-line") || "#1f77b4");
     ctx.fillRect(x + bw * 0.12, 30 + H - h, bw * 0.76, h);
     ctx.fillStyle = css("--plot-fg") || "#222"; ctx.textBaseline = "bottom";
     if (bw > 22 || n <= 14) ctx.fillText(p[key].toFixed(dec).replace(".", ","), x + bw / 2, 30 + H - h - 1);
@@ -1305,12 +1307,32 @@ function fuelleReps(reps) {
   else sm.textContent = "1 Wiederholung erkannt.";
   zeichneBalken();
 }
+// Auswählbare Balkendiagramme (Reihenfolge fest, damit z. B. v Ø direkt unter v max steht)
+const BAR_DEFS = [
+  { key: "v_max", title: "Spitzengeschwindigkeit (m/s)", dec: 2 }, { key: "v_mean", title: "Mittlere Geschwindigkeit (m/s)", dec: 2 },
+  { key: "F_max", title: "Spitzenkraft (N)", dec: 0 }, { key: "F_mean", title: "Mittlere Kraft (N)", dec: 0 },
+  { key: "P_max", title: "Spitzenleistung (W)", dec: 0 }, { key: "P_mean", title: "Mittlere Leistung (W)", dec: 0 },
+  { key: "a_max", title: "Spitzenbeschleunigung (m/s²)", dec: 1 }, { key: "hub", title: "Hub (m)", dec: 2 }, { key: "dauer", title: "Dauer (s)", dec: 2 }];
+const BAR_STANDARD = ["v_max", "v_mean", "F_max", "P_max"];
+function ladeBalkenWahl() {
+  try { const a = JSON.parse(localStorage.getItem("ek-bars") || "null"); if (Array.isArray(a)) return BAR_DEFS.map(d => d.key).filter(k => a.includes(k)); } catch (e) { /* ignorieren */ }
+  return BAR_STANDARD.slice();
+}
+S.bars = ladeBalkenWahl();
+function baueBalkenWahl() {
+  const box = $("barChecks"); box.innerHTML = "";
+  for (const d of BAR_DEFS) {
+    const lb = document.createElement("label"), cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = S.bars.includes(d.key);
+    cb.onchange = () => { S.bars = BAR_DEFS.map(x => x.key).filter(k => k === d.key ? cb.checked : S.bars.includes(k)); try { localStorage.setItem("ek-bars", JSON.stringify(S.bars)); } catch (e) { /* ignorieren */ } zeichneBalken(); };
+    lb.appendChild(cb); lb.appendChild(document.createTextNode(d.title.replace(/ \(.*\)$/, ""))); box.appendChild(lb);
+  }
+}
 function zeichneBalken() {
   if (!S.res || $("tab-reps").hidden) return;
-  const reps = S.res.reps;
-  drawBars($("bar1"), reps, "v_max", "Spitzengeschwindigkeit (m/s)", 2);
-  drawBars($("bar2"), reps, "F_max", "Spitzenkraft (N)", 0);
-  drawBars($("bar3"), reps, "P_max", "Spitzenleistung (W)", 0);
+  const reps = S.res.reps, wrap = $("bars"), defs = BAR_DEFS.filter(d => S.bars.includes(d.key));
+  wrap.innerHTML = "";
+  for (const d of defs) { const c = document.createElement("canvas"); wrap.appendChild(c); drawBars(c, reps, d.key, d.title, d.dec); }
+  if (!defs.length) wrap.innerHTML = '<div style="color:var(--mut);margin-top:8px">Kein Diagramm ausgewählt (oben „Diagramme wählen“).</div>';
 }
 function cursorAnzeige() {
   const c = plot.cursorValues(), el = $("cursor");
@@ -1574,7 +1596,7 @@ function zeigeTab(name) {
   if (name === "curves") plot.resize(); else zeichneBalken();
 }
 function init() {
-  lade(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
+  lade(); baueBalkenWahl(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
   $("btnLast").onclick = () => stelleWiederHer(false); $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle; $("btnDel").onclick = loeschToggle;
   document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
