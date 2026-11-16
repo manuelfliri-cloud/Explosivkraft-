@@ -50,7 +50,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-16-a (Letzte WH, Haltepunkt)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-16-c (Mittelwerte, Standard-Diagramme)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -102,7 +102,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 <div id="tab-reps" class="card" hidden>
   <div id="summary" style="margin-bottom:8px">Noch keine Messung.</div>
   <div class="tablewrap"><table>
-    <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v −%</th><th>F −%</th><th>P −%</th><th></th></tr></thead>
+    <thead><tr><th>Wdh</th><th>Start s</th><th>Dauer s</th><th>Hub m</th><th>a max</th><th>v max</th><th>v Ø</th><th>F max</th><th>F Ø</th><th>P max</th><th>P Ø</th><th>v Ø −%</th><th>F Ø −%</th><th>P Ø −%</th><th></th></tr></thead>
     <tbody id="repBody"></tbody></table></div>
   <details id="barSel" style="margin-top:8px"><summary>Diagramme wählen</summary><div id="barChecks" class="checks"></div></details>
   <div class="bars" id="bars"></div>
@@ -202,6 +202,9 @@ class Rep:
     dv: float = 0.0             # Abfall ggü. bester Wdh. in %
     dF: float = 0.0
     dP: float = 0.0
+    dv_mean: float = 0.0        # Abfall der MITTLEREN Werte ggü. der besten Wdh. in %
+    dF_mean: float = 0.0
+    dP_mean: float = 0.0
 
 
 @dataclass
@@ -245,6 +248,11 @@ class Ergebnis:
                 r.dP = (1 - r.P_max / beste["P_max"]) * 100 if beste["P_max"] > 0 else 0.0
                 r.dF = (1 - r.F_max / beste["F_max"]) * 100 if beste["F_max"] > 0 else 0.0
                 r.dv = (1 - r.v_max / beste["v_max"]) * 100 if beste["v_max"] > 0 else 0.0
+            beste_m = {k: max(getattr(r, k) for r in reps) for k in ("P_mean", "F_mean", "v_mean")}
+            for r in reps:
+                r.dP_mean = (1 - r.P_mean / beste_m["P_mean"]) * 100 if beste_m["P_mean"] > 0 else 0.0
+                r.dF_mean = (1 - r.F_mean / beste_m["F_mean"]) * 100 if beste_m["F_mean"] > 0 else 0.0
+                r.dv_mean = (1 - r.v_mean / beste_m["v_mean"]) * 100 if beste_m["v_mean"] > 0 else 0.0
         self.reps = reps
         self.hub = hub_kurve(self.weg, reps)
 
@@ -1320,13 +1328,13 @@ function fuelleReps(reps) {
     const tr = document.createElement("tr");
     const tdx = document.createElement("td"); const bx = document.createElement("button"); bx.textContent = "✕"; bx.className = "mini"; bx.title = "Wiederholung löschen"; bx.setAttribute("aria-label", `Wiederholung ${r.nr} löschen`);
     const idx = reps.indexOf(r); bx.onclick = () => { repLoeschen(idx).then(() => status(`Wiederholung ${r.nr} gelöscht. Rückgängig ist über den Reiter „Kurven“ möglich.`)); }; tdx.appendChild(bx);
-    [r.nr, r.t_start.toFixed(2), r.dauer.toFixed(2), r.hub.toFixed(2), r.a_max.toFixed(1), r.v_max.toFixed(2), r.v_mean.toFixed(2), r.F_max.toFixed(0), r.F_mean.toFixed(0), r.P_max.toFixed(0), r.P_mean.toFixed(0), r.dv.toFixed(1), r.dF.toFixed(1), r.dP.toFixed(1)]
+    [r.nr, r.t_start.toFixed(2), r.dauer.toFixed(2), r.hub.toFixed(2), r.a_max.toFixed(1), r.v_max.toFixed(2), r.v_mean.toFixed(2), r.F_max.toFixed(0), r.F_mean.toFixed(0), r.P_max.toFixed(0), r.P_mean.toFixed(0), r.dv_mean.toFixed(1), r.dF_mean.toFixed(1), r.dP_mean.toFixed(1)]
       .forEach(v => { const td = document.createElement("td"); td.textContent = String(v).replace(".", ","); tr.appendChild(td); });
     tr.appendChild(tdx); tb.appendChild(tr);
   }
   const sm = $("summary");
   if (!reps.length) sm.textContent = `Keine Wiederholung erkannt (Aufwärtsgeschwindigkeit < ${(S.res.vmin).toString().replace(".", ",")} m/s).`;
-  else if (reps.length > 1) { const l = reps[reps.length - 1]; sm.textContent = `${reps.length} Wiederholungen. Letzte vs. beste: Spitzengeschwindigkeit -${l.dv.toFixed(1)} %, Spitzenkraft -${l.dF.toFixed(1)} %, Spitzenleistung -${l.dP.toFixed(1)} %`.replace(/(\d)\.(\d)/g, "$1,$2"); }
+  else if (reps.length > 1) { const l = reps[reps.length - 1]; sm.textContent = `${reps.length} Wiederholungen. Letzte vs. Beste (mittlere Werte): Geschwindigkeit Ø -${l.dv_mean.toFixed(1)} %, Kraft Ø -${l.dF_mean.toFixed(1)} %, Leistung Ø -${l.dP_mean.toFixed(1)} %`.replace(/(\d)\.(\d)/g, "$1,$2"); }
   else sm.textContent = "1 Wiederholung erkannt.";
   zeichneBalken();
 }
@@ -1336,9 +1344,9 @@ const BAR_DEFS = [
   { key: "F_max", title: "Spitzenkraft (N)", dec: 0 }, { key: "F_mean", title: "Mittlere Kraft (N)", dec: 0 },
   { key: "P_max", title: "Spitzenleistung (W)", dec: 0 }, { key: "P_mean", title: "Mittlere Leistung (W)", dec: 0 },
   { key: "a_max", title: "Spitzenbeschleunigung (m/s²)", dec: 1 }, { key: "dauer", title: "Dauer (s)", dec: 2 }];
-const BAR_STANDARD = ["hub", "v_max", "v_mean", "F_max", "P_max"];
+const BAR_STANDARD = ["hub", "v_mean", "F_mean", "P_mean"];
 function ladeBalkenWahl() {
-  try { const a = JSON.parse(localStorage.getItem("ek-bars2") || "null"); if (Array.isArray(a)) return BAR_DEFS.map(d => d.key).filter(k => a.includes(k)); } catch (e) { /* ignorieren */ }
+  try { const a = JSON.parse(localStorage.getItem("ek-bars3") || "null"); if (Array.isArray(a)) return BAR_DEFS.map(d => d.key).filter(k => a.includes(k)); } catch (e) { /* ignorieren */ }
   return BAR_STANDARD.slice();
 }
 S.bars = ladeBalkenWahl();
@@ -1346,7 +1354,7 @@ function baueBalkenWahl() {
   const box = $("barChecks"); box.innerHTML = "";
   for (const d of BAR_DEFS) {
     const lb = document.createElement("label"), cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = S.bars.includes(d.key);
-    cb.onchange = () => { S.bars = BAR_DEFS.map(x => x.key).filter(k => k === d.key ? cb.checked : S.bars.includes(k)); try { localStorage.setItem("ek-bars2", JSON.stringify(S.bars)); } catch (e) { /* ignorieren */ } zeichneBalken(); };
+    cb.onchange = () => { S.bars = BAR_DEFS.map(x => x.key).filter(k => k === d.key ? cb.checked : S.bars.includes(k)); try { localStorage.setItem("ek-bars3", JSON.stringify(S.bars)); } catch (e) { /* ignorieren */ } zeichneBalken(); };
     lb.appendChild(cb); lb.appendChild(document.createTextNode(d.title.replace(/ \(.*\)$/, ""))); box.appendChild(lb);
   }
 }
@@ -1502,8 +1510,8 @@ async function laden(file) {
 function exportTabelle() {
   const res = S.res; if (!res || !res.reps.length) return;
   const f = (x, d) => x.toFixed(d);
-  const lines = ["Wdh,Start_s,Dauer_s,Hub_m,a_max,v_max,v_mean,F_max,F_mean,P_max,P_mean,v_Abfall_%,F_Abfall_%,P_Abfall_%"].concat(res.reps.map(r =>
-    [r.nr, f(r.t_start, 3), f(r.dauer, 3), f(r.hub, 3), f(r.a_max, 2), f(r.v_max, 3), f(r.v_mean, 3), f(r.F_max, 1), f(r.F_mean, 1), f(r.P_max, 1), f(r.P_mean, 1), f(r.dv, 1), f(r.dF, 1), f(r.dP, 1)].join(",")));
+  const lines = ["Wdh,Start_s,Dauer_s,Hub_m,a_max,v_max,v_mean,F_max,F_mean,P_max,P_mean,v_mean_Abfall_%,F_mean_Abfall_%,P_mean_Abfall_%"].concat(res.reps.map(r =>
+    [r.nr, f(r.t_start, 3), f(r.dauer, 3), f(r.hub, 3), f(r.a_max, 2), f(r.v_max, 3), f(r.v_mean, 3), f(r.F_max, 1), f(r.F_mean, 1), f(r.P_max, 1), f(r.P_mean, 1), f(r.dv_mean, 1), f(r.dF_mean, 1), f(r.dP_mean, 1)].join(",")));
   download(`wiederholungen_${stamp()}.csv`, "﻿" + lines.join("\n") + "\n"); status("Tabelle als Datei gespeichert (Ordner „Downloads“).");
 }
 
