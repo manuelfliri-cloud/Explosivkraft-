@@ -50,7 +50,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-12-e (Hub oben)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-16-a (Letzte WH, Haltepunkt)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -140,6 +140,9 @@ MIN_HUB_ANTEIL = 0.5      # Wdh. mit weniger als 50 % des größten Hubs werden 
 MAX_START_ABW = 0.7       # max. Abweichung der Starthöhe (Anteil des größten Hubs)
 MIN_REP_DAUER = 0.2       # s
 MERGE_LUECKE = 0.1        # s, Wdh. mit kleinerer Lücke werden verschmolzen
+LUECKE_OHNE_SENKEN_S = 0.6   # s, höchstens so lange darf eine Lücke sein, in der nicht gesenkt wird
+LUECKE_SENK_ANTEIL = 0.3  # in der Lücke sinkt die Stange um weniger als diesen Anteil des kleineren Stücks: nicht gesenkt
+LUECKE_GROESSE_ANTEIL = 0.3  # beide Stücke müssen echte Stöße sein (kleineres mind. so groß wie dieser Anteil des größeren)
 BASIS_FENSTER_S = 4.0  # s: Fenster für den langsamen Geschwindigkeits-Versatz bei der Erkennung
 BASIS_TOTZONE = 0.10   # m/s: kleinere Versätze werden nicht herausgerechnet
 ANKER_SCHWELLEN = (V_MIN_REP, 0.10, 0.10)  # Kandidaten fürs Verankern: zweite Stufe empfindlicher
@@ -299,6 +302,18 @@ def tiefpass(daten, fs, grenzfreq):
     return np.convolve(np.pad(daten, (pad, pad), mode="edge"), np.ones(k) / k, mode="valid")
 
 
+def _nachschwingen(v, a, b, dt):
+    """Ist das Stück b (nach dem Stück a) kein eigener Stoß? Das gilt, wenn die Stange dazwischen kaum nach unten kam
+    (bei einer neuen Wiederholung geht sie zuerst zurück zum Start) und b viel kleiner als a ist (Nachschwingen
+    oben nach einem Stoß, kurzer Rückfall). Ist b ähnlich groß wie a, gehören a und b zu einem Stoß (Haltepunkt)."""
+    ha = float(np.sum(v[a[0]:a[1]]) * dt)
+    hb = float(np.sum(v[b[0]:b[1]]) * dt)
+    senk = -float(np.min(np.cumsum(v[a[1]:b[0]]) * dt)) if b[0] > a[1] else 0.0
+    if senk >= LUECKE_SENK_ANTEIL * min(ha, hb):
+        return None                      # dazwischen wurde gesenkt: neue Wiederholung
+    return "verwerfen" if hb < LUECKE_GROESSE_ANTEIL * ha else "verbinden"
+
+
 def finde_wiederholungen(v, dt, v_min=V_MIN_REP, v_hoch=None):
     """Fenster, in denen v über v_min liegt und mindestens einmal v_hoch erreicht (Standard: v_hoch = v_min)."""
     n = len(v)
@@ -319,6 +334,10 @@ def finde_wiederholungen(v, dt, v_min=V_MIN_REP, v_hoch=None):
     for s in segs:
         if merged and (s[0] - merged[-1][1]) * dt < MERGE_LUECKE:
             merged[-1][1] = s[1]
+        elif merged and (s[0] - merged[-1][1]) * dt < LUECKE_OHNE_SENKEN_S and _nachschwingen(v, merged[-1], s, dt):
+            if _nachschwingen(v, merged[-1], s, dt) == "verbinden":
+                merged[-1][1] = s[1]     # ein einziger, langsamer Stoß mit kurzem Einbruch (Haltepunkt)
+            # sonst: Nachschwingen nach dem Stoß, kein eigener Stoß und nicht Teil des Fensters
         else:
             merged.append(s)
 
@@ -479,6 +498,8 @@ def zyklen_schliessen(v, starts, dt, ende=None):
         T = float(np.median(laengen))
         e = s + int(round(T / dt))
         i_vor = float(np.median(netto))
+        gleichmaessig = abs(i_vor) >= DRIFT_MIN and float(np.std(netto)) <= DRIFT_KONSISTENT * abs(i_vor)
+        gesenkt = False
         if j is not None and e < len(v) and e > s + 10:
             hub = float(w[s:s + j + 1].max() - w[s])
             net = float(w[s + j] - w[s])
@@ -486,18 +507,20 @@ def zyklen_schliessen(v, starts, dt, ende=None):
             # ein kurzes Nachschwingen nach dem Stoß zählt nicht (sonst wird der Stoß selbst weggerechnet).
             wk = integrieren(v, dt)                 # v ist inzwischen durch die früheren Zyklen korrigiert
             senk = float(wk[s:s + j + 1].max() - wk[s + j])
-            if hub > 0 and senk >= SENK_ANTEIL * hub and abs(net - i_vor) < LETZTE_TOL * hub:
-                if abs(i_vor) >= DRIFT_MIN and float(np.std(netto)) <= DRIFT_KONSISTENT * abs(i_vor):
-                    # Die früheren Zyklen driften gleichmäßig (Sensorneigung): die letzte driftet genauso.
-                    tau = np.arange(e - s + 1) * dt
-                    v[s:e + 1] -= (i_vor * 6 / T ** 3) * tau * (T - tau)
-                else:
-                    # Keine gleichmäßige Drift in den früheren Zyklen: die Stange kam nach dem Senken zurück auf die
-                    # Startposition, der Rest ist ein Messfehler dieser Wiederholung und wird wie bei den anderen abgezogen.
-                    Tj = j * dt
-                    tau = np.arange(j + 1) * dt
-                    p = tau * (Tj - tau)
-                    v[s:s + j + 1] -= _trapez(v[s:s + j + 1], dt) / _trapez(p, dt) * p
+            gesenkt = hub > 0 and senk >= SENK_ANTEIL * hub and abs(net - i_vor) < LETZTE_TOL * hub
+            if gesenkt and not gleichmaessig:
+                # Keine gleichmäßige Drift in den früheren Zyklen: die Stange kam nach dem Senken zurück auf die
+                # Startposition, der Rest ist ein Messfehler dieser Wiederholung und wird wie bei den anderen abgezogen.
+                Tj = j * dt
+                tau = np.arange(j + 1) * dt
+                p = tau * (Tj - tau)
+                v[s:s + j + 1] -= _trapez(v[s:s + j + 1], dt) / _trapez(p, dt) * p
+        if gleichmaessig and e < len(v) and e > s + 10:
+            # Die früheren Zyklen driften alle gleich (Sensorneigung) und wurden korrigiert. Die letzte Wiederholung
+            # driftet genauso und bekommt dieselbe Korrektur, egal ob die Stange danach gesenkt wurde oder oben bleibt
+            # (Satzende); sonst ist sie als einzige zu groß.
+            tau = np.arange(e - s + 1) * dt
+            v[s:e + 1] -= (i_vor * 6 / T ** 3) * tau * (T - tau)
     return v
 
 
