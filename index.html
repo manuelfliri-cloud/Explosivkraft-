@@ -50,7 +50,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-16-c (Mittelwerte, Standard-Diagramme)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-16-e (ohne Aus-Modus)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -65,7 +65,7 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
     <div class="row" style="margin-top:8px">
       <label>Masse (kg) <span id="masseHelp" style="text-decoration:underline;cursor:pointer">?</span><input id="masse" inputmode="decimal" value="100"></label>
       <label>Dauer (s)<input id="dauer" inputmode="decimal" value="20"></label>
-      <label>Korrektur<select id="korr"><option>Aus (nur Z-Achse)</option><option selected>Sensorwinkel</option><option>Gyro-Filter (Drehungen)</option></select></label>
+      <label>Korrektur<select id="korr"><option selected>Sensorwinkel</option><option>Gyro-Filter (Drehungen)</option></select></label>
       <label>Tiefpass (Hz)<select id="filter"><option>Aus</option><option>10</option><option selected>20</option><option>30</option><option>50</option></select></label>
       <label>Abtastrate (Hz)<select id="rate" disabled><option>10</option><option>20</option><option>50</option><option selected>100</option><option>200</option></select></label>
       <button id="btnCal">Kalibrieren</button>
@@ -164,6 +164,7 @@ MIN_FENSTER_SAMPLES = 5   # kleinste erlaubte Fensterbreite
 V_MIN_KAND = 0.10         # m/s, untere Schwelle der endgültigen Kandidatensuche (Fensterränder, langsame Wdh. mit Plateau)
 V_HOCH_KAND = 0.15        # m/s, so schnell muss v im Fenster mindestens einmal sein
 START_NACHBARN = 3        # Starthöhe wird mit so vielen Wdh. links/rechts verglichen (nicht mit der besten)
+ANHEBEN_ANTEIL = 0.3      # erster Kandidat mit Spitzengeschwindigkeit unter diesem Anteil der übrigen: Ausheben aus dem Ständer
 V_MIN_BEREICH = (V_MIN_REP, 0.08, 0.04)   # immer empfindlichere Schwellen für den markierten Bereich
 
 # Gyro-Filter
@@ -448,6 +449,13 @@ def verwerfe_stoerungen(v, segs, dt):
     start_ok |= hubs >= VOLLER_HUB_ANTEIL * h_ref
     start_ok[ref] = True
     keep = hub_ok & start_ok
+    # Ausheben aus dem Ständer: vor dem Satz wird die Stange langsam angehoben (Hub oft fast wie eine Wiederholung,
+    # aber nur ein Bruchteil der Geschwindigkeit). Nur der erste Kandidat wird so geprüft, damit eine langsame
+    # letzte Wiederholung (Ermüdung) nie aussortiert wird.
+    vmax = np.array([v[s:e].max() for s, e in segs])
+    rest = np.sort(vmax[1:])
+    if len(rest) and vmax[0] < ANHEBEN_ANTEIL * float(np.median(rest[len(rest) // 2:])):
+        keep[0] = False
     return [sg for sg, k in zip(segs, keep) if k]
 
 
@@ -1308,9 +1316,8 @@ async function auswerten(extra = "", fenster = null) {
     S.manual = fenster !== null; S.undo = [];
     zeigeErgebnis(JSON.parse(out));
     const r = S.res;
-    const pmax = Math.max(...r.P);
     sichere(); $("btnLast").disabled = false;
-    status(`[${MODES[modus]}] ${r.reps.length} Wiederholung(en), Spitzenleistung ${pmax.toFixed(0)} W, Drift am Ende ${r.drift.toFixed(2)} m/s${extra}`);
+    status(`[${MODES[modus]}] ${r.reps.length} Wiederholung(en), Drift am Ende ${r.drift.toFixed(2)} m/s${extra}`);
     return true;
   } catch (e) { status("Fehler bei der Auswertung: " + e.message); return false; }
   finally { setBusy(false); }
@@ -1500,7 +1507,7 @@ async function laden(file) {
     if (data.length < 50 || data.some(r => r.some(x => !isFinite(x)))) throw new Error("Datei enthält zu wenige oder ungültige Messpunkte.");
     S.res = null; S.samples = data; setDatei(file.name); S.samplesHz = /^\d+$/.test(meta.hz || "") ? parseInt(meta.hz, 10) : null;
     if (meta.masse) $("masse").value = meta.masse;
-    if (meta.korrektur !== undefined && MODES[+meta.korrektur]) $("korr").value = MODES[+meta.korrektur];
+    if (meta.korrektur !== undefined && +meta.korrektur >= 1 && MODES[+meta.korrektur]) $("korr").value = MODES[+meta.korrektur];
     if (["Aus", "10", "20", "30", "50"].includes(meta.filter)) $("filter").value = meta.filter;
     let fenster = null;
     if (meta.reps && (meta.reps_manuell ?? "1") === "1") fenster = meta.reps.split(";").map(p => { const [a, b] = p.split(":"); return (a.includes(".") || b.includes(".")) ? [parseFloat(a), parseFloat(b)] : [parseInt(a, 10) * 0.01, parseInt(b, 10) * 0.01]; });
