@@ -1,2 +1,0 @@
-{"name":"Tindeq","short_name":"Tindeq","start_url":"./tindeq.html","scope":"./","display":"standalone","orientation":"any","background_color":"#121212","theme_color":"#1e1e1e","lang":"de",
- "icons":[{"src":"tindeq-192.png","sizes":"192x192","type":"image/png","purpose":"any"},{"src":"tindeq-512.png","sizes":"512x512","type":"image/png","purpose":"any"},{"src":"tindeq-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}]}
