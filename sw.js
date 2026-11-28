@@ -1,5 +1,5 @@
 /* Service Worker: App-Seite online zuerst (so kommen Updates an), Auswertungsmodul (Pyodide) dauerhaft im Zwischenspeicher */
-const SHELL = "ek-shell-v1", LIB = "ek-lib-v1";
+const SHELL = "ek-shell-v2", LIB = "ek-lib-v1";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(SHELL).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== SHELL && k !== LIB).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

@@ -7,7 +7,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Witmotion Sensor</title>
+<title>Explosivkraft-Sensor</title>
 <style>
 :root{--bg:#f4f6f8;--card:#fff;--fg:#1d2733;--mut:#5d6b7a;--line:#d5dbe1;--pri:#1b6ec2;--priT:#fff;--bad:#c62828;--ok:#2e7d32;
 --plot-bg:#fff;--plot-fg:#1d2733;--plot-grid:#e3e7eb;--plot-line:#1f77b4;--plot-acc:#d62728;--plot-span:rgba(255,127,14,.16);--plot-good:#2ca02c}
@@ -46,11 +46,14 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 #menu{position:fixed;z-index:10;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.3);padding:6px;display:flex;flex-direction:column;gap:4px;max-width:92vw}
 #menu button{text-align:left;border:0;min-height:44px}
 #aktionen{gap:6px;padding:8px}#aktionen button{min-height:36px;padding:3px 9px;font-size:13px}
+#kal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:12px}
+.kalbox{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:14px;max-width:560px;width:100%;max-height:92vh;overflow:auto}
+.kalbox ol{margin:6px 0 10px;padding-left:22px;font-size:13px;font-variant-numeric:tabular-nums}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
-<h1>Witmotion Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v2026-11-20-b (Sprung im Hauptfenster)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
+<h1>Explosivkraft-Sensor <small style="font-weight:400;font-size:12px;opacity:.7">v4.2 (WitMotion, Stance, PASCO)</small> <span id="engine" style="font-weight:400">Auswertung wird geladen ...</span></h1>
 <div id="datei" hidden style="font-size:13px;margin:-4px 0 6px;opacity:.85;word-break:break-all"></div>
 
 <div class="card">
@@ -68,8 +71,8 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
       <label>Korrektur<select id="korr"><option selected>Sensorwinkel</option><option>Gyro-Filter (Drehungen)</option></select></label>
       <label>Tiefpass (Hz)<select id="filter"><option>Aus</option><option>10</option><option selected>20</option><option>30</option><option>50</option></select></label>
       <label>Abtastrate (Hz)<select id="rate" disabled><option>10</option><option>20</option><option>50</option><option selected>100</option><option>200</option></select></label>
-      <button id="btnCal">Kalibrieren</button>
-      <label class="chk" title="Falls der Sensor in der Liste nicht erscheint"><input type="checkbox" id="alle"> alle Geräte zeigen</label>
+      <button id="btnCal">6-Seiten-Kalibrierung</button>
+      <label class="chk" title="Falls der Sensor in der Liste nicht erscheint (z. B. der Stance-Sensor)"><input type="checkbox" id="alle"> alle Geräte zeigen (z. B. Stance)</label>
     </div>
   </details>
 </div>
@@ -110,9 +113,23 @@ button.on{background:var(--pri);color:var(--priT);border-color:var(--pri)}
 </div>
 
 
+<div id="kal" hidden>
+  <div class="kalbox">
+    <b>6-Seiten-Kalibrierung</b>
+    <p>Den Sensor nacheinander auf alle 6 Seiten legen, die Reihenfolge ist egal. Jedes Mal hinlegen, loslassen und dann „Lage messen“ drücken (dauert etwa 3 s). Am besten auf einer festen, waagrechten Fläche; auf schmalen Seiten an einer Kante anlehnen.</p>
+    <div id="kalInfo" style="font-weight:700;margin:6px 0">Lage 1 von 6</div>
+    <ol id="kalListe"></ol>
+    <div class="row">
+      <button id="kalMess" class="pri">Lage messen</button>
+      <button id="kalOk" disabled>Übernehmen</button>
+      <button id="kalAbbr">Abbrechen</button>
+    </div>
+  </div>
+</div>
 <div id="menu" hidden></div>
 <script type="text/plain" id="analyse-py">"""
 Auswertung der Beschleunigungsdaten (ohne GUI- oder Bluetooth-Abhängigkeiten).
+Version 4.2: Geschwindigkeits-Nullpunkt am letzten Ruhepunkt vor jeder Wiederholung statt am Fensteranfang.
 
 Eingabe: Liste von Samples (t, ax, ay, az, az_welt, gx, gy, gz) mit Beschleunigung in g
 und Drehrate in °/s. Ausgabe: ein Ergebnis-Objekt mit Kurven und Kennwerten je Wiederholung.
@@ -148,6 +165,8 @@ LUECKE_GROESSE_ANTEIL = 0.3  # beide Stücke müssen echte Stöße sein (kleiner
 BASIS_FENSTER_S = 4.0  # s: Fenster für den langsamen Geschwindigkeits-Versatz bei der Erkennung
 BASIS_TOTZONE = 0.10   # m/s: kleinere Versätze werden nicht herausgerechnet
 ANKER_SCHWELLEN = (V_MIN_REP, 0.10, 0.10)  # Kandidaten fürs Verankern: zweite Stufe empfindlicher
+ANKER_RUHE_A = 0.3        # m/s²: darunter (über 0,1 s) steht die Last still, dort wird v = 0 gesetzt
+ANKER_SUCHE_S = 1.0       # s: so weit vor dem Fensteranfang wird nach diesem Ruhepunkt gesucht
 VOLLER_HUB_ANTEIL = 0.8  # Kandidaten mit mindestens diesem Hub-Anteil entfallen von der Starthöhen-Prüfung
 MAX_ZYKLUS_S = 6.0     # s: Zyklen (Start bis nächster Start) bis zu dieser Länge werden geschlossen
 VORLAUF_MAX_S = 1.0     # s: längerer Vorlauf vor der Spitze gilt nicht mehr als Teil des Stoßes
@@ -553,6 +572,66 @@ def hub_kurve(weg, reps):
     return weg - weg[0]
 
 
+class LageLive:
+    """Derselbe Mahony-Filter wie vertikal_mit_gyro, aber Sample für Sample (für die Live-Anzeige des PASCO).
+    Die ersten 0,5 s müssen ruhig sein: daraus kommen die Startlage und der Gyro-Nullpunkt. Bis dahin wird auf die
+    bisher gemittelte Schwerkraftrichtung projiziert."""
+
+    def __init__(self, hz):
+        self.n0 = max(3, int(0.5 * hz))
+        self.n = 0
+        self.acc_sum = np.zeros(3)
+        self.gyr_sum = np.zeros(3)
+        self.q = None
+        self.bias = np.zeros(3)
+        self.u = np.array([0.0, 0.0, 1.0])
+
+    def schritt(self, acc, gyr_dps, dt):
+        """acc in g, gyr_dps in °/s, dt in s. Gibt die senkrechte Beschleunigung in g zurück."""
+        ax, ay, az = acc
+        if self.q is None:
+            self.n += 1
+            self.acc_sum += (ax, ay, az)
+            self.gyr_sum += np.radians(gyr_dps)
+            m = self.acc_sum / self.n
+            nm = np.linalg.norm(m)
+            if nm > 1e-6:
+                self.u = m / nm
+            if self.n >= self.n0:
+                self.bias = self.gyr_sum / self.n
+                u = self.u
+                if u[2] < -0.999:
+                    q = (0.0, 1.0, 0.0, 0.0)
+                else:
+                    q = (1.0 + u[2], u[1], -u[0], 0.0)
+                nq = math.sqrt(sum(c * c for c in q))
+                self.q = tuple(c / nq for c in q)
+            return float(self.u @ np.array([ax, ay, az]))
+        w, x, y, z = self.q
+        wx, wy, wz = np.radians(gyr_dps) - self.bias
+        dt = min(max(dt, 0.0), 0.05)
+        an = math.sqrt(ax * ax + ay * ay + az * az)
+        if an > 1e-6 and abs(an - 1.0) < GATE:
+            kp = KP_GYRO * (1.0 - abs(an - 1.0) / GATE)
+            vx = 2 * (x * z - w * y)
+            vy = 2 * (y * z + w * x)
+            vz = w * w - x * x - y * y + z * z
+            nax, nay, naz = ax / an, ay / an, az / an
+            wx += kp * (nay * vz - naz * vy)
+            wy += kp * (naz * vx - nax * vz)
+            wz += kp * (nax * vy - nay * vx)
+        h = 0.5 * dt
+        dw = -x * wx - y * wy - z * wz
+        dx = w * wx + y * wz - z * wy
+        dy = w * wy - x * wz + z * wx
+        dz = w * wz + x * wy - y * wx
+        w, x, y, z = w + dw * h, x + dx * h, y + dy * h, z + dz * h
+        nq = math.sqrt(w * w + x * x + y * y + z * z)
+        self.q = (w / nq, x / nq, y / nq, z / nq)
+        w, x, y, z = self.q
+        return (2 * (x * z - w * y) * ax + 2 * (y * z + w * x) * ay + (w * w - x * x - y * y + z * z) * az)
+
+
 def vertikal_mit_gyro(arr):
     """Vertikale Beschleunigung (g) mit Mahony-Filter inkl. Gate gegen Fremdbeschleunigung."""
     t = arr[:, COL_T]
@@ -678,13 +757,31 @@ def auswerten(samples, masse, modus, grenzfreq=20.0, hz=None, fenster=None):
         v_[~im_fenster] = 0.0
         return v_
 
-    # Drift herausrechnen: Anker an den Starts aller Kandidaten (dort ist v ~ 0), mehrfach wiederholen,
+    # Ruhe = Last steht wirklich still (|a| klein über 0,1 s). Nur dort ist v sicher 0.
+    ruhe_schwelle = max(ANKER_RUHE_A, 4 * float(np.std(a[:n0])))
+    in_ruhe = _gleitend(np.abs(a), round(0.1 / dt), np.max) < ruhe_schwelle
+
+    def anker_vor(s, links):
+        """Nullpunkt der Geschwindigkeit vor dem Kandidaten, der bei s beginnt: der letzte Ruhepunkt kurz davor
+        (die Bewegung beginnt meist schon vor dem Fensteranfang, dort ist v nicht mehr 0). Ohne Ruhe davor
+        (z. B. Umkehrpunkt bei Kniebeugen ohne Pause) der Fensteranfang selbst."""
+        lo = max(i0, links, s - int(ANKER_SUCHE_S / dt))
+        ruhig = np.flatnonzero(in_ruhe[lo:s])
+        return lo + int(ruhig[-1]) if len(ruhig) else s - 1
+
+    def anker_liste(kand):
+        anker, links = [i0], i0
+        for s, e in kand:
+            anker.append(min(max(anker_vor(s, links), i0), i1))
+            links = e
+        return sorted(set(anker + [i1]))
+
+    # Drift herausrechnen: Anker vor den Starts aller Kandidaten (dort ist v ~ 0), mehrfach wiederholen,
     # weil bessere Anker die Kandidaten wieder verbessern (wichtig bei langen Sätzen mit Sensorkippen).
     v = v_aus_ankern([i0, i1])
     for v_min in ANKER_SCHWELLEN:
         kand = erkenne(v, dt, v_min)
-        anker = sorted(set([i0] + [min(max(s - 1, i0), i1) for s, _ in kand] + [i1]))
-        v = v_aus_ankern(anker)
+        v = v_aus_ankern(anker_liste(kand))
     segs = verwerfe_stoerungen(v, erkenne(v, dt, V_MIN_KAND, V_HOCH_KAND), dt)
 
     if fenster is not None:
@@ -970,8 +1067,7 @@ def sprung_ansicht(erg, fenster=None):
         grenzen = [(int(round(a / dt)), int(round(b / dt)), None if c is None else int(round(c / dt)))
                    for a, b, c in fenster]
     ans.setze_reps(grenzen)
-    return ans
-</script>
+    return ans</script>
 <script type="text/plain" id="worker-src">/* Web Worker: Pyodide + unverändertes analyse.py */
 let py = null;
 const BOOT = `
@@ -1005,6 +1101,12 @@ def run_sprung(par, buf):
         return json.dumps(dict(keine=True, warn=list(e.warnungen)))
     RES = A.sprung_ansicht(e, p.get("fenster"))
     return pack(RES)
+def run_welt(par, buf):
+    p = json.loads(par)
+    arr = np.array(buf.to_py(), dtype=float).reshape(-1, p["ncols"])
+    g = arr.copy()
+    g[:, 0] = A.rekonstruiere_zeit(arr[:, 0])
+    return json.dumps(np.round(A.vertikal_mit_gyro(g), 6).tolist())
 def run_bereich(par):
     t0, t1 = json.loads(par)
     return json.dumps([list(map(int, x)) for x in RES.erkenne_im_bereich(t0, t1)])
@@ -1033,6 +1135,10 @@ self.onmessage = async (e) => {
       py.globals.set("PAR", JSON.stringify(args.par));
       py.globals.set("BUF", args.buf);
       out = py.runPython("run_sprung(PAR, BUF)");
+    } else if (cmd === "welt") {
+      py.globals.set("PAR", JSON.stringify(args.par));
+      py.globals.set("BUF", args.buf);
+      out = py.runPython("run_welt(PAR, BUF)");
     } else if (cmd === "bereich") {
       py.globals.set("PAR", JSON.stringify(args.bereich));
       out = py.runPython("run_bereich(PAR)");
@@ -1044,20 +1150,38 @@ self.onmessage = async (e) => {
 };
 </script>
 <script>"use strict";
-/* Bluetooth-Anbindung (Web Bluetooth) und Live-Berechnung für den WitMotion WT9011DCL.
-   Entspricht der Klasse Sensor im PC-Programm (explosivkraft.py). */
+/* Bluetooth-Anbindung (Web Bluetooth) und Live-Berechnung für
+   WitMotion WT9011DCL, Stance-Variante (30-Byte-Frames) und PASCO PS-3223.
+   Entspricht der Klasse Sensor im PC-Programm (explosivkraft.py, Version 4.2). */
 
 const G = 9.80665;
-const SERVICE_UUIDS = ["0000ffe5-0000-1000-8000-00805f9a34fb", "0000ffe0-0000-1000-8000-00805f9a34fb"];
+const WIT_SERVICES = ["0000ffe5-0000-1000-8000-00805f9a34fb", "0000ffe0-0000-1000-8000-00805f9a34fb"];
 const NOTIFY_UUID = "0000ffe4-0000-1000-8000-00805f9a34fb";
 const WRITE_UUID = "0000ffe9-0000-1000-8000-00805f9a34fb";
 // WT9011DCL laut Datenblatt: 0x0A ist nicht belegt, 200 Hz = 0x0B
 const RATE_CODES = { 10: 0x06, 20: 0x07, 50: 0x08, 100: 0x09, 200: 0x0B };
+// Aufbau der 0x55-0x61-Datenframes: Länge -> Byte-Position der Beschleunigung, Name, Winkel nutzbar.
+// Stance-Variante (30 Byte): 4 Wörter Uhrzeit des Sensors, dann ax ay az gx gy gz; die Winkel sind nicht geprüft,
+// deshalb kommt die senkrechte Beschleunigung wie beim PASCO aus dem Gyro-Filter.
+const FRAME_FORMATE = { 20: { off: 2, name: "Standard", winkel: true }, 30: { off: 10, name: "Stance mit Zeitstempel", winkel: false } };
+const FORMAT_SUCHE_MAX = 4000;
+// PASCO PS-3223 (Accel Alt): Befehle aus dem SPARKvue-Bluetooth-Protokoll
+const PASCO_PREFIX = "Accel Alt";
+const PASCO_RATEN = [20, 50, 100, 200];      // 20 und 200 Hz sind am echten Sensor (mit Python) geprüft
+const PASCO_STANDARD = 200;
+const PASCO_M_S2 = 0.004787;                 // m/s² je Zähler (±16 g)
+const PASCO_GYRO_DPS = 0.07;                 // °/s je Zähler (Datenblatt)
+const PASCO_G = 9.80665;
+const pascoUuid = (dienst, merkmal) => `4a5c000${dienst}-000${merkmal}-0000-0000-5c1e741f1c00`;
+const pascoDienst = dienst => `4a5c000${dienst}-0000-0000-0000-5c1e741f1c00`;   // Annahme, am echten Sensor noch nicht geprüft
+const PASCO_DIENSTE = [0, 1, 2, 3].map(pascoDienst);
 
 const STILL_STD = 0.25, POS_RESET = 0.15, RUHE_STRENG = 0.06, RUHE_LOCKER_S = 1.0, V_RUHE = 0.08;
 const VERTRAUEN_MIN = 0.4, ABW_WEIT = 1.0, BIAS_RATE = 0.01, RUHE_MAX_S = 2.5;
 const LIVE_MAX = 3000;
+const GATE = 0.15, KP_GYRO = 1.0;            // wie analyse.py
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 function mittel(a) { let s = 0; for (const x of a) s += x; return s / a.length; }
 function stdabw(a) { const m = mittel(a); let s = 0; for (const x of a) s += (x - m) * (x - m); return Math.sqrt(s / a.length); }
 function integrieren(a, dt) {           // Trapezregel wie analyse.integrieren
@@ -1066,40 +1190,112 @@ function integrieren(a, dt) {           // Trapezregel wie analyse.integrieren
   return out;
 }
 
+/* Mahony-Filter Sample für Sample (analyse.LageLive). Die ersten 0,5 s müssen ruhig sein: daraus kommen die
+   Startlage und der Gyro-Nullpunkt. Bis dahin wird auf die bisher gemittelte Schwerkraftrichtung projiziert. */
+class LageLive {
+  constructor(hz) {
+    this.n0 = Math.max(3, Math.floor(0.5 * hz)); this.n = 0;
+    this.accSum = [0, 0, 0]; this.gyrSum = [0, 0, 0]; this.q = null; this.bias = [0, 0, 0]; this.u = [0, 0, 1];
+  }
+  schritt(ax, ay, az, gx, gy, gz, dt) {
+    const rad = Math.PI / 180;
+    if (this.q === null) {
+      this.n++;
+      this.accSum[0] += ax; this.accSum[1] += ay; this.accSum[2] += az;
+      this.gyrSum[0] += gx * rad; this.gyrSum[1] += gy * rad; this.gyrSum[2] += gz * rad;
+      const m = this.accSum.map(x => x / this.n), nm = Math.hypot(m[0], m[1], m[2]);
+      if (nm > 1e-6) this.u = m.map(x => x / nm);
+      if (this.n >= this.n0) {
+        this.bias = this.gyrSum.map(x => x / this.n);
+        const u = this.u;
+        let q = u[2] < -0.999 ? [0, 1, 0, 0] : [1 + u[2], u[1], -u[0], 0];
+        const nq = Math.hypot(q[0], q[1], q[2], q[3]);
+        this.q = q.map(c => c / nq);
+      }
+      return this.u[0] * ax + this.u[1] * ay + this.u[2] * az;
+    }
+    let [w, x, y, z] = this.q;
+    let wx = gx * rad - this.bias[0], wy = gy * rad - this.bias[1], wz = gz * rad - this.bias[2];
+    dt = Math.min(Math.max(dt, 0), 0.05);
+    const an = Math.sqrt(ax * ax + ay * ay + az * az);
+    if (an > 1e-6 && Math.abs(an - 1) < GATE) {
+      const kp = KP_GYRO * (1 - Math.abs(an - 1) / GATE);
+      const vx = 2 * (x * z - w * y), vy = 2 * (y * z + w * x), vz = w * w - x * x - y * y + z * z;
+      const nax = ax / an, nay = ay / an, naz = az / an;
+      wx += kp * (nay * vz - naz * vy); wy += kp * (naz * vx - nax * vz); wz += kp * (nax * vy - nay * vx);
+    }
+    const h = 0.5 * dt;
+    const dw = -x * wx - y * wy - z * wz, dx = w * wx + y * wz - z * wy, dy = w * wy - x * wz + z * wx, dz = w * wz + x * wy - y * wx;
+    w += dw * h; x += dx * h; y += dy * h; z += dz * h;
+    const nq = Math.sqrt(w * w + x * x + y * y + z * z);
+    w /= nq; x /= nq; y /= nq; z /= nq; this.q = [w, x, y, z];
+    return (2 * (x * z - w * y) * ax + 2 * (y * z + w * x) * ay + (w * w - x * x - y * y + z * z) * az);
+  }
+}
+
 class Sensor {
   constructor(onEvent) {
     this.onEvent = onEvent || (() => {});
-    this.device = null; this.server = null; this.notifyChar = null; this.writeChar = null;
+    this.device = null; this.server = null; this.notifyChar = null; this.writeChar = null; this.chars = {};
     this.buf = []; this.t0 = performance.now() / 1000;
-    this.mass = 100; this.scale = 1.0; this.calib = null; this.hz = 100;
+    this.mass = 100; this.calib = null; this.hz = 100;
+    this.typ = "witmotion";        // "witmotion" | "pasco"; der Stance-Sensor ist ein witmotion mit 30-Byte-Frames
+    this.frameLen = null; this.accOff = 2; this.mitWinkel = true; this.formatText = "";
+    this.kal6 = null;              // 6-Seiten-Kalibrierung {o:[3], s:[3]} des verbundenen Sensors
+    this.kal6s = {};               // gespeicherte Kalibrierungen je Sensor
+    this.scaleKey = "witmotion";
+    this.dtFest = false;           // true: Abtasttakt kommt vom Sensor (PASCO), nicht aus den Ankunftszeiten
+    this.lage = null;              // Gyro-Filter für die Live-Anzeige (Stance, PASCO)
     this.recording = false; this.rec = [];
-    this.live = [];                 // Zeilen: [t, pos, v, a, F, P]
+    this.live = [];                // Zeilen: [t, pos, v, a, F, P]
     this.frames = 0;
+    // PASCO
+    this.wq = Promise.resolve();
+    this.pAcc = []; this.pGyr = []; this.pStrom = { 1: [], 2: [] }; this.pZaehler = { 1: null, 2: null };
+    this.pIdx = 0; this.pTStart = 0; this.pLetztes = 0; this.pPakete = 0; this.pVerloren = 0; this.pAktiv = false;
+    this.pMitHoehe = false; this.pWache = null; this.pNeustarts = 0;
     this.resetLive();
   }
 
   resetLive() {
     this.win = []; this.winMax = 25; this.bias = 0; this.vLive = 0; this.posLive = 0;
-    this.nSamples = 0; this.tFirst = null; this.tLive = 0; this.dtNom = 0.01; this.biasOk = false;
+    this.nSamples = 0; this.tFirst = null; this.tLive = 0; this.dtNom = 1.0 / (this.hz || 100); this.biasOk = false;
     this.stillN = 0; this.quietN = 0; this.calmN = 0; this.pfad = 0;
     this.segAktiv = false; this.segA = []; this.biasStart = 0; this.restPos = 0;
     this.live = [];
   }
 
   get connected() { return !!(this.server && this.server.connected); }
+  get raten() { return this.typ === "pasco" ? PASCO_RATEN : Object.keys(RATE_CODES).map(Number); }
+  get sensorName() { return this.typ === "pasco" ? "PASCO" : (this.frameLen === 30 ? "Stance" : "WitMotion"); }
 
   // ---------- Verbindung ----------
   async connect(alleGeraete = false) {
+    const services = [...WIT_SERVICES, ...PASCO_DIENSTE];
     const opts = alleGeraete
-      ? { acceptAllDevices: true, optionalServices: SERVICE_UUIDS }
-      : { filters: [{ namePrefix: "WT" }], optionalServices: SERVICE_UUIDS };
+      ? { acceptAllDevices: true, optionalServices: services }
+      : { filters: [{ namePrefix: "WT" }, { namePrefix: PASCO_PREFIX }], optionalServices: services };
     this.onEvent("status", "Suche Sensor ...");
     this.device = await navigator.bluetooth.requestDevice(opts);
-    this.device.addEventListener("gattserverdisconnected", () => this.onEvent("disconnected", "Verbindung zum Sensor verloren."));
-    this.onEvent("status", `Verbinde mit ${this.device.name || "Sensor"} ...`);
+    this.device.addEventListener("gattserverdisconnected", () => { this.stopWache(); this.pAktiv = false; this.onEvent("disconnected", "Verbindung zum Sensor verloren."); });
+    const name = this.device.name || "";
+    this.typ = name.startsWith(PASCO_PREFIX) ? "pasco" : "witmotion";
+    this.dtFest = this.typ === "pasco";
+    this.scaleKey = this.typ === "pasco" ? "pasco" : (this.device.id || name || "witmotion");
+    this.kal6 = this.kal6s[this.scaleKey] || null;
+    this.buf = []; this.frameLen = null; this.accOff = 2; this.mitWinkel = true; this.formatText = "";
+    this.lage = null; this.frames = 0;
+    this.hz = this.typ === "pasco" ? PASCO_STANDARD : 100;
+    this.resetLive();
+    this.onEvent("status", `Verbinde mit ${name || "Sensor"} ...`);
     this.server = await this.device.gatt.connect();
+    if (this.typ === "pasco") await this.verbindePasco(); else await this.verbindeWit();
+    this.onEvent("connected", name || "Sensor");
+  }
+
+  async verbindeWit() {
     this.notifyChar = null; this.writeChar = null;
-    for (const uuid of SERVICE_UUIDS) {
+    for (const uuid of WIT_SERVICES) {
       let svc;
       try { svc = await this.server.getPrimaryService(uuid); } catch (e) { continue; }
       for (const ch of await svc.getCharacteristics()) {
@@ -1109,16 +1305,57 @@ class Sensor {
       if (this.notifyChar) break;
     }
     if (!this.notifyChar) throw new Error("Datenkanal des Sensors nicht gefunden (Service FFE5/FFE4).");
-    this.buf = [];
-    this.resetLive();
     this.notifyChar.addEventListener("characteristicvaluechanged", (e) => this.onData(e.target.value));
     await this.notifyChar.startNotifications();
     try { await this.applyRate(100); } catch (e) { console.warn("Standard-Abtastrate konnte nicht gesetzt werden", e); }
-    this.onEvent("connected", this.device.name || "Sensor");
   }
 
-  disconnect() {
-    try { if (this.server && this.server.connected) this.server.disconnect(); } catch (e) { /* ignorieren */ }
+  async verbindePasco() {
+    this.chars = {};
+    for (const d of [0, 1, 2, 3]) {
+      try {
+        const svc = await this.server.getPrimaryService(pascoDienst(d));
+        for (const ch of await svc.getCharacteristics()) this.chars[ch.uuid] = ch;
+      } catch (e) { /* Dienst nicht vorhanden */ }
+    }
+    const noetig = [pascoUuid(0, 2), pascoUuid(0, 3), pascoUuid(1, 2), pascoUuid(1, 4), pascoUuid(2, 2), pascoUuid(2, 4)];
+    const fehlt = noetig.filter(u => !this.chars[u]);
+    if (fehlt.length) {
+      throw new Error("PASCO: Bluetooth-Kanäle nicht gefunden (" + fehlt.map(u => u.slice(7, 13)).join(", ") +
+        "). Vorhandene Kanäle: " + (Object.keys(this.chars).map(u => u.slice(7, 13)).join(", ") || "keine"));
+    }
+    for (const d of [1, 2, 3]) {
+      const ch = this.chars[pascoUuid(d, 4)];
+      if (ch) { ch.addEventListener("characteristicvaluechanged", e => this.pascoPaket(d, e.target.value)); await ch.startNotifications(); }
+    }
+    const antw = this.chars[pascoUuid(0, 3)];
+    await antw.startNotifications();
+    await this.pwrite(pascoUuid(0, 2), [0x00]);
+    await sleep(300);
+    try { await this.pascoStart(PASCO_STANDARD); }
+    catch (e) { console.error("PASCO-Datenstrom konnte nicht gestartet werden", e); throw e; }
+    this.stopWache(); this.pWache = setInterval(() => this.wache(), 1000);
+  }
+
+  stopWache() { if (this.pWache) { clearInterval(this.pWache); this.pWache = null; } }
+
+  async disconnect() {
+    this.stopWache();
+    try {
+      if (this.typ === "pasco" && this.connected) await Promise.race([this.pascoStopp(), sleep(2000)]);
+      if (this.server && this.server.connected) this.server.disconnect();
+    } catch (e) { /* ignorieren */ }
+  }
+
+  // Schreibzugriffe nacheinander ausführen: Web Bluetooth erlaubt nur einen Zugriff gleichzeitig
+  pwrite(uuid, bytes) {
+    const ch = this.chars[uuid];
+    if (!ch) return Promise.resolve();
+    const u8 = new Uint8Array(bytes);
+    const lauf = () => ch.writeValueWithoutResponse ? ch.writeValueWithoutResponse(u8) : ch.writeValue(u8);
+    const p = this.wq.then(lauf);
+    this.wq = p.catch(() => {});
+    return p;
   }
 
   async write(bytes) {
@@ -1129,44 +1366,196 @@ class Sensor {
   }
 
   async applyRate(hz) {
+    if (this.typ === "pasco") { await this.pascoStart(hz); return; }
     await this.write([0xFF, 0xAA, 0x69, 0x88, 0xB5]);          // entsperren
-    await new Promise(r => setTimeout(r, 200));
+    await sleep(200);
     await this.write([0xFF, 0xAA, 0x03, RATE_CODES[hz], 0x00]);
     this.winMax = Math.max(5, Math.floor(hz * 0.25));
     this.dtNom = 1.0 / hz; this.nSamples = 0; this.tFirst = null; this.win = [];
+    if (hz !== this.hz) this.lage = null;                       // Gyro-Filter (Sensor ohne Winkel) mit der neuen Rate neu starten
     this.hz = hz;
   }
 
-  // ---------- Datenempfang ----------
-  onData(dataView) {
-    for (let i = 0; i < dataView.byteLength; i++) this.buf.push(dataView.getUint8(i));
-    const tAnkunft = performance.now() / 1000 - this.t0;
-    while (this.buf.length >= 20) {
-      if (this.buf[0] !== 0x55 || this.buf[1] !== 0x61) { this.buf.shift(); continue; }
-      const f = this.buf.splice(0, 20);
-      const dv = new DataView(new Uint8Array(f).buffer);
-      const v = []; for (let k = 0; k < 9; k++) v.push(dv.getInt16(2 + 2 * k, true));
+  // ---------- PASCO PS-3223 ----------
+  pascoBefehle(hz, mitHoehe) {
+    // Die Befehle, die SPARKvue zum Starten des schnellen Datenstroms sendet. Abtastperiode in Mikrosekunden
+    // (4 Byte, little endian); der Sensor streamt nur zuverlässig, wenn neben der Beschleunigung auch das Gyro an ist.
+    const p = Math.round(1e6 / hz), per = [p & 255, (p >> 8) & 255, (p >> 16) & 255, (p >> 24) & 255];
+    const b = [[pascoUuid(1, 2), [0x01, ...per, 0x06, 0x00]], [pascoUuid(1, 2), [0x28, 0, 0, 1]],
+      [pascoUuid(2, 2), [0x01, ...per, 0x06, 0x00]]];
+    if (mitHoehe && this.chars[pascoUuid(3, 2)]) {
+      b.push([pascoUuid(3, 2), [0x01, 0xA0, 0x86, 0x01, 0x00, 0x04, 0x00]], [pascoUuid(3, 2), [0x28, 0, 0, 2]]);   // 100000 µs
+    }
+    b.push([pascoUuid(1, 2), [0x29, 0, 0, 0, 0, 0, 0, 0x64, 0, 0]], [pascoUuid(0, 2), [0x06, 0xE9, 0x02]], [pascoUuid(0, 2), [0x00]]);
+    return b;
+  }
+
+  async pascoStopp() {
+    this.pAktiv = false;
+    try { await this.pwrite(pascoUuid(0, 2), [0x07]); } catch (e) { console.warn("PASCO-Stoppbefehl fehlgeschlagen", e); }
+    await sleep(300);
+  }
+
+  pascoLeeren() {
+    this.pAcc = []; this.pGyr = []; this.pStrom = { 1: [], 2: [] }; this.pZaehler = { 1: null, 2: null };
+    this.pIdx = 0; this.pPakete = 0; this.pVerloren = 0;
+  }
+
+  async pascoStart(hz, mitHoehe = false) {
+    if (this.pAktiv) { await this.pascoStopp(); await sleep(700); }
+    this.pascoLeeren();
+    this.winMax = Math.max(5, Math.floor(hz * 0.25));
+    this.dtNom = 1.0 / hz; this.nSamples = 0; this.tFirst = null; this.win = [];
+    if (hz !== this.hz) this.lage = null;                       // andere Rate: Lagefilter neu starten
+    this.hz = hz; this.pMitHoehe = mitHoehe;
+    this.pTStart = performance.now() / 1000 - this.t0;
+    this.pLetztes = performance.now() / 1000;
+    this.pAktiv = true;
+    for (const [u, b] of this.pascoBefehle(hz, mitHoehe)) { await this.pwrite(u, b); await sleep(50); }
+  }
+
+  async wache() {
+    // Hält die Verbindung wach und startet den Datenstrom neu, falls er stehen bleibt.
+    if (this.wacheLaeuft || !this.connected || this.typ !== "pasco" || !this.pAktiv) return;
+    this.wacheLaeuft = true;
+    try {
+      const jetzt = performance.now() / 1000;
+      if (this.letzterKeepalive === undefined) this.letzterKeepalive = jetzt;
+      if (jetzt - this.letzterKeepalive > 8) { await this.pwrite(pascoUuid(0, 2), [0x00]); this.letzterKeepalive = jetzt; }
+      if (jetzt - this.pLetztes > 4.0) {
+        this.versuche = (this.versuche || 0) + 1; this.pNeustarts++;
+        this.onEvent("status", "PASCO: Datenstrom steht - starte neu ...");
+        await this.pascoStart(this.hz, this.versuche >= 2);       // ab dem 2. Versuch zusätzlich den Höhenmesser einschalten (wie SPARKvue)
+      } else if (jetzt - this.pLetztes < 1.0) this.versuche = 0;
+    } catch (e) { console.warn("PASCO-Wache", e); }
+    finally { this.wacheLaeuft = false; }
+  }
+
+  pascoPaket(dienst, dv) {
+    // Ein Paket = 1 Zählbyte (0..31) + Nutzdaten. Die Nutzdaten aller Pakete eines Kanals bilden einen durchgehenden
+    // Strom aus 6-Byte-Werten (x, y, z als int16).
+    const n = dv.byteLength;
+    if (!n) return;
+    const c = dv.getUint8(0);
+    if (c > 0x1F) return;
+    if (dienst === 1 || dienst === 2) {
+      this.pLetztes = performance.now() / 1000;
+      const letzter = this.pZaehler[dienst], st = this.pStrom[dienst];
+      if (letzter !== null && c !== ((letzter + 1) & 0x1F)) {
+        this.pVerloren += (c - letzter - 1) & 0x1F;
+        const rest = st.length % 6;                              // Strom ist nicht mehr bündig: angefangenen Wert verwerfen
+        if (rest) st.length -= rest;
+      }
+      this.pZaehler[dienst] = c; this.pPakete++;
+      for (let i = 1; i < n; i++) st.push(dv.getUint8(i));
+      const k = Math.floor(st.length / 6);
+      if (k) {
+        const ziel = dienst === 1 ? this.pAcc : this.pGyr;
+        for (let i = 0; i < k; i++) {
+          const o = 6 * i, w = j => ((st[o + 2 * j + 1] << 8) | st[o + 2 * j]) << 16 >> 16;
+          ziel.push([w(0), w(1), w(2)]);
+        }
+        st.splice(0, 6 * k);
+        this.pascoZusammen();
+      }
+    }
+    if ((c & 7) === 7 && this.connected) this.pwrite(pascoUuid(dienst, 5), [0, 0, 0, 0, c]).catch(() => {});   // Quittung nach jedem 8. Paket
+  }
+
+  pascoZusammen() {
+    // Beschleunigung und Gyro paarweise zu einem Sample verbinden.
+    while (this.pAcc.length && this.pGyr.length) {
+      const a = this.pAcc.shift(), g = this.pGyr.shift();
+      let ax = a[0] * PASCO_M_S2 / PASCO_G, ay = a[1] * PASCO_M_S2 / PASCO_G, az = a[2] * PASCO_M_S2 / PASCO_G;
+      if (this.calib) this.calib.push([ax, ay, az]);
+      [ax, ay, az] = this.korrigiere(ax, ay, az);
+      const gx = g[0] * PASCO_GYRO_DPS, gy = g[1] * PASCO_GYRO_DPS, gz = g[2] * PASCO_GYRO_DPS;
+      const t = this.pTStart + this.pIdx / this.hz;             // Zeit aus dem Sensortakt
+      this.pIdx++; this.frames++;
+      const azW = this.lageSchritt(ax, ay, az, gx, gy, gz, 1.0 / this.hz);
+      this.liveUpdate(performance.now() / 1000 - this.t0, (azW - 1.0) * G);
+      if (this.recording) this.rec.push([t, ax, ay, az, az, gx, gy, gz]);
+    }
+  }
+
+  lageSchritt(ax, ay, az, gx, gy, gz, dt) {
+    // Ohne Winkel-Fusion im Sensor: die senkrechte Beschleunigung kommt live aus demselben Gyro-Filter wie in der
+    // Auswertung (die ersten 0,5 s nach dem Verbinden müssen dafür ruhig liegen).
+    if (this.lage === null) this.lage = new LageLive(this.hz);
+    try { return this.lage.schritt(ax, ay, az, gx, gy, gz, dt); }
+    catch (e) { console.error("Lagefilter live", e); return az; }
+  }
+
+  // ---------- Datenempfang WitMotion / Stance ----------
+  formatErkennen() {
+    // Länge der Datenframes aus dem Abstand der Frame-Köpfe 0x55 0x61 bestimmen. Ein zufälliges 0x55 0x61 in den
+    // Messwerten stört nicht, es zählt der häufigste Abstand. true, sobald das Format feststeht.
+    const pos = [], b = this.buf;
+    for (let i = 0; i + 1 < b.length; i++) if (b[i] === 0x55 && b[i + 1] === 0x61) pos.push(i);
+    const abst = [], zaehl = {};
+    for (let i = 1; i < pos.length; i++) { const d = pos[i] - pos[i - 1]; abst.push(d); zaehl[d] = (zaehl[d] || 0) + 1; }
+    let laenge = null;
+    if (abst.length >= 8) {
+      let best = null; for (const k in zaehl) if (best === null || zaehl[k] > zaehl[best]) best = k;
+      if (zaehl[best] >= 6 && FRAME_FORMATE[best]) laenge = +best;
+    }
+    if (laenge === null) {
+      if (b.length < FORMAT_SUCHE_MAX) return false;             // weiter sammeln
+      laenge = 20;
+      this.formatText = "Datenformat unbekannt - Standard angenommen, Werte evtl. falsch!";
+      console.warn("WitMotion: kein bekanntes Frameformat erkannt", abst.slice(0, 20));
+    } else {
+      this.formatText = `Datenformat: ${FRAME_FORMATE[laenge].name} (${laenge} Byte)`;
+      if (!FRAME_FORMATE[laenge].winkel) this.formatText += " - Sensor kurz ruhig liegen lassen";
+    }
+    this.frameLen = laenge; this.accOff = FRAME_FORMATE[laenge].off; this.mitWinkel = FRAME_FORMATE[laenge].winkel;
+    this.onEvent("format", this.formatText);
+    return true;
+  }
+
+  onData(dv) {
+    for (let i = 0; i < dv.byteLength; i++) this.buf.push(dv.getUint8(i));
+    if (this.frameLen === null && !this.formatErkennen()) return;
+    const tAnkunft = performance.now() / 1000 - this.t0, L = this.frameLen, o = this.accOff, b = this.buf;
+    let p = 0;
+    while (b.length - p >= L) {
+      if (b[p] !== 0x55 || b[p + 1] !== 0x61) { p++; continue; }
+      const v = []; for (let k = 0; k < 9; k++) { const lo = b[p + o + 2 * k], hi = b[p + o + 2 * k + 1]; v.push(((hi << 8) | lo) << 16 >> 16); }
+      p += L;
       this.verarbeite(v, tAnkunft);
     }
+    if (p) b.splice(0, p);
   }
 
   verarbeite(v, t) {
     let ax = v[0] / 32768 * 16, ay = v[1] / 32768 * 16, az = v[2] / 32768 * 16;
     if (this.calib) this.calib.push([ax, ay, az]);
-    ax *= this.scale; ay *= this.scale; az *= this.scale;
+    [ax, ay, az] = this.korrigiere(ax, ay, az);
     const gx = v[3] / 32768 * 2000, gy = v[4] / 32768 * 2000, gz = v[5] / 32768 * 2000;
-    const roll = v[6] / 32768 * Math.PI, pitch = v[7] / 32768 * Math.PI;
-    const azW = -Math.sin(pitch) * ax + Math.sin(roll) * Math.cos(pitch) * ay + Math.cos(roll) * Math.cos(pitch) * az;
+    let azW;
+    if (this.mitWinkel) {
+      const roll = v[6] / 32768 * Math.PI, pitch = v[7] / 32768 * Math.PI;
+      azW = -Math.sin(pitch) * ax + Math.sin(roll) * Math.cos(pitch) * ay + Math.cos(roll) * Math.cos(pitch) * az;
+    } else {
+      azW = this.lageSchritt(ax, ay, az, gx, gy, gz, this.dtNom);   // gemessene Taktzeit (die Rate kann abweichen)
+    }
     this.frames++;
     this.liveUpdate(t, (azW - 1.0) * G);
     if (this.recording) this.rec.push([t, ax, ay, az, azW, gx, gy, gz]);
+  }
+
+  korrigiere(ax, ay, az) {
+    // Rohwerte (g) korrigieren: 6-Seiten-Kalibrierung (Nullpunkt und Empfindlichkeit je Achse), sonst unverändert.
+    const k = this.kal6;
+    if (k) return [(ax - k.o[0]) / k.s[0], (ay - k.o[1]) / k.s[1], (az - k.o[2]) / k.s[2]];
+    return [ax, ay, az];
   }
 
   // ---------- Live-Berechnung (1:1 aus dem PC-Programm) ----------
   liveUpdate(tAnkunft, aRaw) {
     this.nSamples++;
     if (this.tFirst === null) this.tFirst = tAnkunft;
-    else if (this.nSamples >= 300 && this.nSamples % 100 === 0) {
+    else if (!this.dtFest && this.nSamples >= 300 && this.nSamples % 100 === 0) {
       const dtMittel = (tAnkunft - this.tFirst) / (this.nSamples - 1);
       if (Math.abs(dtMittel - this.dtNom) > 0.25 * this.dtNom) this.dtNom = dtMittel;
     }
@@ -1236,20 +1625,36 @@ class Sensor {
     this.vLive = 0.0; this.posLive = pos[n - 1]; this.restPos = this.posLive;
   }
 
-  // ---------- Kalibrierung ----------
-  startKalibrierung() { this.calib = []; }
-  endeKalibrierung() {
+  // ---------- 6-Seiten-Kalibrierung ----------
+  /* Eine Lage messen: wartet 0,7 s (ausschwingen), sammelt dann 2,5 s Rohwerte. Gibt {ok, m:[3], seite} oder {ok:false, text}. */
+  async messeLage() {
+    await sleep(700);
+    this.calib = [];
+    await sleep(2500);
     const d = this.calib; this.calib = null;
-    if (!d || d.length < 50) return { ok: false, text: "Kalibrierung fehlgeschlagen: zu wenige Daten." };
+    if (!d || d.length < 30) return { ok: false, text: "Zu wenige Daten empfangen - bitte nochmal messen." };
     const m = [0, 1, 2].map(k => mittel(d.map(r => r[k])));
-    const s = [0, 1, 2].map(k => stdabw(d.map(r => r[k])));
-    if (s.some(x => x > 0.02)) return { ok: false, text: "Kalibrierung abgebrochen: Sensor war nicht ruhig." };
-    const scale = 1.0 / Math.hypot(m[0], m[1], m[2]);
-    if (!(scale > 0.9 && scale < 1.1)) return { ok: false, text: `Kalibrierung unplausibel (Faktor ${scale.toFixed(3)}) - nicht übernommen.` };
-    this.scale = scale;
-    return { ok: true, scale, text: `Kalibriert: Skalierungsfaktor ${scale.toFixed(4)} (gilt für neue Messungen).` };
+    if ([0, 1, 2].some(k => stdabw(d.map(r => r[k])) > 0.02)) return { ok: false, text: "Sensor war nicht ruhig - diese Lage bitte nochmal messen." };
+    const k = m.map(Math.abs).indexOf(Math.max(...m.map(Math.abs)));
+    if (Math.abs(m[k]) < 0.8) return { ok: false, text: "Keine Achse zeigt senkrecht nach oben - Sensor flach auf eine Seite legen." };
+    return { ok: true, m, seite: (m[k] > 0 ? "+" : "-") + "xyz"[k] };
   }
 }
+
+/* Aus 6 Lagen Nullpunkt o und Empfindlichkeit s je Achse berechnen: o = (max + min) / 2, s = (max - min) / 2. */
+function berechneKal6(lagen) {
+  const M = lagen.map(l => l.m);
+  const o = [0, 1, 2].map(k => (Math.max(...M.map(r => r[k])) + Math.min(...M.map(r => r[k]))) / 2);
+  const s = [0, 1, 2].map(k => (Math.max(...M.map(r => r[k])) - Math.min(...M.map(r => r[k]))) / 2);
+  if (s.some(x => Math.abs(x - 1) > 0.1) || o.some(x => Math.abs(x) > 0.15)) return { ok: false, text: "Ergebnis unplausibel - nicht übernommen. Bitte neu starten." };
+  const betrag = M.map(r => Math.hypot(...[0, 1, 2].map(k => (r[k] - o[k]) / s[k])));
+  const z = M.reduce((b, r) => (r[2] > b[2] ? r : b), M[0]);
+  const flach = Math.hypot(z[0], z[1], z[2]);
+  return { ok: true, o, s, bmin: Math.min(...betrag), bmax: Math.max(...betrag), zFehler: (s[2] / flach - 1) * 100 };
+}
+
+if (typeof module !== "undefined") module.exports = { Sensor, LageLive, berechneKal6, PASCO_PREFIX, PASCO_DIENSTE, pascoUuid, pascoDienst, WIT_SERVICES, NOTIFY_UUID, WRITE_UUID, RATE_CODES, PASCO_RATEN };
+
 </script>
 <script>"use strict";
 /* Kurvenanzeige: 5 gestapelte Diagramme auf einem Canvas, Touch-Zoom/Verschieben, Cursor, Vergrößern */
@@ -1579,15 +1984,17 @@ const MODES = ["Aus (nur Z-Achse)", "Sensorwinkel", "Gyro-Filter (Drehungen)"];
 const LIVE_SECONDS = 10;
 const PYODIDE_BASE = new URLSearchParams(location.search).get("pyodide") || "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
 
-const S = { sensor: null, state: "idle", samples: [], samplesHz: null, res: null, manual: false, liveOn: false, job: null, wake: null, undo: [], box: false, modusSprung: false };
+const S = { kal6s: {}, sensor: null, state: "idle", samples: [], samplesHz: null, res: null, manual: false, liveOn: false, job: null, wake: null, undo: [], box: false, modusSprung: false };
 let plot, worker, workerReady, msgId = 0;
 const pending = new Map();
 
 // ---------- Hilfen ----------
 function status(t) { $("status").textContent = String(t).replace(/(\d)\.(\d)/g, "$1,$2"); }
 function warn(t) { $("warn").textContent = t || ""; $("warn").hidden = !t; }
-function speichere() { try { localStorage.setItem("ek", JSON.stringify({ masse: $("masse").value, dauer: $("dauer").value, korr: $("korr").value, filter: $("filter").value, scale: S.sensor ? S.sensor.scale : S.scale })); } catch (e) { /* ignorieren */ } }
-function lade() { try { const c = JSON.parse(localStorage.getItem("ek") || "{}"); if (c.masse) $("masse").value = c.masse; if (c.dauer) $("dauer").value = c.dauer; if (c.korr) $("korr").value = c.korr; if (c.filter) $("filter").value = c.filter; if (c.scale) S.scale = c.scale; } catch (e) { /* ignorieren */ } }
+function speichere() { try { localStorage.setItem("ek", JSON.stringify({ masse: $("masse").value, dauer: $("dauer").value, korr: $("korr").value, filter: $("filter").value })); } catch (e) { /* ignorieren */ } }
+function ladeKal() { try { S.kal6s = JSON.parse(localStorage.getItem("ek-kal6") || "{}") || {}; } catch (e) { S.kal6s = {}; } }
+function speichereKal() { try { localStorage.setItem("ek-kal6", JSON.stringify(S.kal6s)); } catch (e) { /* ignorieren */ } }
+function lade() { try { const c = JSON.parse(localStorage.getItem("ek") || "{}"); if (c.masse) $("masse").value = c.masse; if (c.dauer) $("dauer").value = c.dauer; if (c.korr) $("korr").value = c.korr; if (c.filter) $("filter").value = c.filter; } catch (e) { /* ignorieren */ } }
 function download(name, text, type = "text/csv") {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type }));
   a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -1728,17 +2135,18 @@ async function verbinden() {
   if (!navigator.bluetooth) { status("Dieser Browser unterstützt kein Web Bluetooth. Bitte Chrome auf Android verwenden."); return; }
   S.sensor = new Sensor((kind, val) => {
     if (kind === "status") status(val);
+    else if (kind === "format") { S.formatText = val; if (S.state === "idle") status(verbStatus()); }
     else if (kind === "disconnected") {
       const aktiv = S.state === "countdown" || S.state === "recording";
       if (aktiv) stopManuell();
       S.liveOn = false; $("btnLive").textContent = "Live-Daten"; setVerbunden(false); status(aktiv ? val + " | " + $("status").textContent : val);
     }
   });
-  S.sensor.scale = S.scale || 1.0;
+  S.sensor.kal6s = S.kal6s; S.formatText = "";
   try {
     $("btnConnect").disabled = true;
     await S.sensor.connect($("alle").checked);
-    $("rate").value = "100"; setVerbunden(true); status(`Verbunden mit ${S.sensor.device.name || "Sensor"}`);
+    fuelleRaten(); setVerbunden(true); status(verbStatus());
     try { if (navigator.wakeLock) S.wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignorieren */ }
   } catch (e) {
     $("btnConnect").disabled = false;
@@ -1746,17 +2154,55 @@ async function verbinden() {
   }
 }
 document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && S.sensor && S.sensor.connected && navigator.wakeLock) { try { S.wake = await navigator.wakeLock.request("screen"); } catch (e) { /* ignorieren */ } } });
+function verbStatus() {
+  const s = S.sensor; if (!s) return "";
+  return [`Verbunden mit ${s.device.name || "Sensor"} (${s.sensorName})`, S.formatText,
+    s.kal6 ? "6-Seiten-kalibriert" : "nicht kalibriert: 6-Seiten-Kalibrierung empfohlen"].filter(Boolean).join(" | ");
+}
+function fuelleRaten() {
+  const s = S.sensor, sel = $("rate"); sel.innerHTML = "";
+  for (const r of s.raten) { const o = document.createElement("option"); o.textContent = String(r); sel.appendChild(o); }
+  sel.value = String(s.hz);
+}
 function setVerbunden(v) {
   $("btnConnect").disabled = v;
   for (const id of ["btnLive", "btnStart", "btnCal", "rate"]) $(id).disabled = !v;
   $("btnStop").disabled = true;
 }
-async function kalibrieren() {
-  if (!S.sensor || S.state !== "idle") return;
-  S.state = "cal"; setSperre(true); S.sensor.startKalibrierung(); status("Kalibrierung: Sensor 3 s ruhig hinlegen ...");
-  await new Promise(r => setTimeout(r, 3000));
-  const r = S.sensor.endeKalibrierung(); status(r.text); if (r.ok) { S.scale = r.scale; speichere(); }
-  S.state = "idle"; setSperre(false);
+function kalibrieren() {
+  const s = S.sensor; if (!s || S.state !== "idle") return Promise.resolve();
+  S.state = "cal"; setSperre(true);
+  const lagen = []; let erg = null;
+  $("kal").hidden = false; $("kalListe").innerHTML = ""; $("kalInfo").textContent = "Lage 1 von 6";
+  $("kalMess").disabled = false; $("kalOk").disabled = true;
+  return new Promise(fertig => {
+    const ende = () => { $("kal").hidden = true; s.calib = null; S.state = "idle"; setSperre(false); setVerbunden(s.connected); fertig(); };
+    $("kalAbbr").onclick = ende;
+    $("kalMess").onclick = async () => {
+      $("kalMess").disabled = true; $("kalInfo").textContent = "Messe ... Sensor nicht berühren";
+      const r = await s.messeLage();
+      if ($("kal").hidden) return;
+      $("kalMess").disabled = false;
+      if (!r.ok) { $("kalInfo").textContent = r.text; return; }
+      if (lagen.some(l => l.seite === r.seite)) { $("kalInfo").textContent = `Die Seite ${r.seite} oben hatten wir schon - bitte eine andere Seite.`; return; }
+      lagen.push(r);
+      const li = document.createElement("li");
+      li.textContent = `${r.seite} oben    ax=${r.m[0].toFixed(4)}   ay=${r.m[1].toFixed(4)}   az=${r.m[2].toFixed(4)} g`; $("kalListe").appendChild(li);
+      if (lagen.length < 6) { $("kalInfo").textContent = `Lage ${lagen.length + 1} von 6`; return; }
+      $("kalMess").disabled = true;
+      erg = berechneKal6(lagen);
+      if (!erg.ok) { $("kalInfo").textContent = erg.text; return; }
+      const f = (x, n = 4) => x.toFixed(n);
+      $("kalInfo").textContent = `Empfindlichkeit x ${f(erg.s[0])}  y ${f(erg.s[1])}  z ${f(erg.s[2])}\nNullpunkt x ${f(erg.o[0])}  y ${f(erg.o[1])}  z ${f(erg.o[2])} g\nPrüfung: |a| in allen Lagen ${f(erg.bmin)} ... ${f(erg.bmax)} g (ideal 1,0000)\nEine Kalibrierung nur in einer Lage (1 g) hätte Bewegungen entlang z um ${erg.zFehler.toFixed(1)} % verfälscht.`;
+      $("kalInfo").style.whiteSpace = "pre-line"; $("kalOk").disabled = false;
+    };
+    $("kalOk").onclick = () => {
+      if (!erg || !erg.ok) return;
+      const k = { o: erg.o.map(x => +x.toFixed(5)), s: erg.s.map(x => +x.toFixed(5)) };
+      s.kal6 = k; s.kal6s[s.scaleKey] = Object.assign({ datum: new Date().toISOString().slice(0, 16).replace("T", " ") }, k);
+      S.kal6s = s.kal6s; speichereKal(); status("6-Seiten-Kalibrierung übernommen (gilt für neue Messungen)."); ende();
+    };
+  });
 }
 function setSperre(b) { for (const id of ["btnLive", "btnStart", "btnCal", "rate"]) $(id).disabled = b; $("btnStop").disabled = !b || S.state === "cal"; }
 
@@ -1777,12 +2223,23 @@ function stopManuell() {
   if (S.state === "countdown") { S.state = "idle"; setSperre(false); setVerbunden(S.sensor && S.sensor.connected); status("Messung abgebrochen"); return; }
   stop();
 }
-function stop() {
+async function weltSpalte() {
+  const ncols = S.samples[0].length, buf = new Float64Array(S.samples.length * ncols);
+  S.samples.forEach((r, i) => buf.set(r, i * ncols));
+  await workerReady;
+  const w = JSON.parse(await call("welt", { par: { ncols }, buf }));
+  S.samples.forEach((r, i) => { r[4] = w[i]; });
+}
+async function stop() {
   if (S.state !== "recording") return;
   S.job = null; S.sensor.recording = false; S.state = "idle"; setSperre(false); setVerbunden(S.sensor.connected);
   S.samples = S.sensor.rec.slice(); S.samplesHz = S.sensor.hz; setDatei("");
   if (S.samples.length < 50) { status("Zu wenige Daten empfangen."); return; }
   const dauerS = S.samples[S.samples.length - 1][0] - S.samples[0][0], hz = S.samples.length / dauerS;
+  if (S.sensor.typ === "pasco" || !S.sensor.mitWinkel) {
+    status("Berechne die Lage (Gyro-Filter) ..."); setBusy(true);
+    try { await weltSpalte(); } catch (e) { status("Gyro-Filter fehlgeschlagen: " + e.message); } finally { setBusy(false); }
+  }
   auswerten(` (${dauerS.toFixed(1)} s aufgenommen, ~${hz.toFixed(0)} Hz)`);
 }
 async function neuAuswerten() {
@@ -1959,7 +2416,7 @@ function zeigeTab(name) {
   if (name === "curves") plot.resize(); else zeichneBalken();
 }
 function init() {
-  lade(); baueBalkenWahl(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
+  lade(); ladeKal(); baueBalkenWahl(); plot = new Plot($("plot"), cursorAnzeige); plot.onEdit = plotEdit;
   $("btnLast").onclick = () => stelleWiederHer(false); $("btnUndo").onclick = rueckgaengig; $("btnBox").onclick = boxToggle; $("btnEdge").onclick = kanteToggle; $("btnDel").onclick = loeschToggle;
   document.addEventListener("pointerdown", e => { if (!$("menu").hidden && !$("menu").contains(e.target)) schliesseMenu(); }, true);
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {}); plot.setEmpty(); cursorAnzeige();
